@@ -14,7 +14,9 @@ defmodule ExAgent.Providers.OpenAITest do
     end
 
     test "accepts custom model and base_url" do
-      provider = OpenAI.new(api_key: "sk-test", model: "gpt-4o-mini", base_url: "https://custom.api.com")
+      provider =
+        OpenAI.new(api_key: "sk-test", model: "gpt-4o-mini", base_url: "https://custom.api.com")
+
       assert provider.model == "gpt-4o-mini"
       assert provider.base_url == "https://custom.api.com"
     end

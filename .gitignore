@@ -24,3 +24,5 @@ ex_agent-*.tar
 
 .elixir_ls
 .claude
+.DS_Store
+.run

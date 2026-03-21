@@ -15,6 +15,8 @@ defmodule ExAgent.Providers.OpenAI do
           api_key: String.t(),
           model: String.t(),
           base_url: String.t(),
+          temperature: float(),
+          max_tokens: integer(),
           system_prompt: String.t() | nil,
           tools: [ExAgent.Tool.t()],
           req: Req.Request.t() | nil
@@ -27,6 +29,8 @@ defmodule ExAgent.Providers.OpenAI do
     :req,
     model: "gpt-4o",
     base_url: "https://api.openai.com/v1",
+    temperature: 0.6,
+    max_tokens: 512,
     tools: []
   ]
 
@@ -34,6 +38,8 @@ defmodule ExAgent.Providers.OpenAI do
     api_key: [type: :string, required: true, doc: "OpenAI API key"],
     model: [type: :string, default: "gpt-4o", doc: "Model name"],
     base_url: [type: :string, default: "https://api.openai.com/v1", doc: "API base URL"],
+    temperature: [type: :float, default: 0.6],
+    max_tokens: [type: :pos_integer, default: 512],
     system_prompt: [type: {:or, [:string, nil]}, default: nil, doc: "System prompt"],
     tools: [type: {:list, :any}, default: [], doc: "Available tools"]
   ]
@@ -67,11 +73,8 @@ defmodule ExAgent.Providers.OpenAI do
   defimpl ExAgent.LlmProvider do
     def chat(provider, messages, opts \\ []) do
       ExAgent.Services.OpenAIService.chat(
-        provider.req,
-        provider.model,
+        provider,
         messages,
-        provider.tools,
-        provider.system_prompt,
         opts
       )
     end

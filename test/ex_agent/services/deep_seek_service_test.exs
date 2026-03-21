@@ -19,9 +19,10 @@ defmodule ExAgent.Services.DeepSeekServiceTest do
   # Happy path tests
   describe "chat/6 success" do
     test "returns assistant message for simple chat" do
-      req = build_req(fn conn ->
-        Req.Test.json(conn, success_response("Hello!"))
-      end)
+      req =
+        build_req(fn conn ->
+          Req.Test.json(conn, success_response("Hello!"))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
 
@@ -30,25 +31,27 @@ defmodule ExAgent.Services.DeepSeekServiceTest do
     end
 
     test "sends system prompt when provided" do
-      req = build_req(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        [system | _] = parsed["messages"]
-        assert system["role"] == "system"
-        Req.Test.json(conn, success_response("Ok"))
-      end)
+      req =
+        build_req(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          [system | _] = parsed["messages"]
+          assert system["role"] == "system"
+          Req.Test.json(conn, success_response("Ok"))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
       assert {:ok, _} = DeepSeekService.chat(req, "deepseek-chat", [msg], [], "Be helpful")
     end
 
     test "uses correct model in request body" do
-      req = build_req(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        assert parsed["model"] == "deepseek-reasoner"
-        Req.Test.json(conn, success_response("Ok"))
-      end)
+      req =
+        build_req(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          assert parsed["model"] == "deepseek-reasoner"
+          Req.Test.json(conn, success_response("Ok"))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
       assert {:ok, _} = DeepSeekService.chat(req, "deepseek-reasoner", [msg], [], nil)
@@ -58,27 +61,32 @@ defmodule ExAgent.Services.DeepSeekServiceTest do
   # Bad path tests
   describe "chat/6 errors" do
     test "returns error for non-200 status" do
-      req = build_req(fn conn ->
-        conn |> Plug.Conn.send_resp(429, Jason.encode!(%{"error" => "rate limited"}))
-      end)
+      req =
+        build_req(fn conn ->
+          conn |> Plug.Conn.send_resp(429, Jason.encode!(%{"error" => "rate limited"}))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
       assert {:error, {429, _}} = DeepSeekService.chat(req, "deepseek-chat", [msg], [], nil)
     end
 
     test "returns error for unexpected response" do
-      req = build_req(fn conn ->
-        Req.Test.json(conn, %{"no_choices" => true})
-      end)
+      req =
+        build_req(fn conn ->
+          Req.Test.json(conn, %{"no_choices" => true})
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
-      assert {:error, {:unexpected_response, _}} = DeepSeekService.chat(req, "deepseek-chat", [msg], [], nil)
+
+      assert {:error, {:unexpected_response, _}} =
+               DeepSeekService.chat(req, "deepseek-chat", [msg], [], nil)
     end
 
     test "returns error for server errors" do
-      req = build_req(fn conn ->
-        conn |> Plug.Conn.send_resp(503, Jason.encode!(%{"error" => "unavailable"}))
-      end)
+      req =
+        build_req(fn conn ->
+          conn |> Plug.Conn.send_resp(503, Jason.encode!(%{"error" => "unavailable"}))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
       assert {:error, {503, _}} = DeepSeekService.chat(req, "deepseek-chat", [msg], [], nil)
@@ -88,31 +96,37 @@ defmodule ExAgent.Services.DeepSeekServiceTest do
   # Built-in tools tests
   describe "built_in_tools" do
     test "adds thinking mode to request body" do
-      req = build_req(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        assert parsed["thinking"] == %{"type" => "enabled"}
-        Req.Test.json(conn, success_response("Thinking..."))
-      end)
+      req =
+        build_req(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          assert parsed["thinking"] == %{"type" => "enabled"}
+          Req.Test.json(conn, success_response("Thinking..."))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Think about this")
 
       assert {:ok, _} =
-               DeepSeekService.chat(req, "deepseek-reasoner", [msg], [], nil, built_in_tools: [:thinking])
+               DeepSeekService.chat(req, "deepseek-reasoner", [msg], [], nil,
+                 built_in_tools: [:thinking]
+               )
     end
 
     test "ignores unknown built-in tools" do
-      req = build_req(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        refute Map.has_key?(parsed, "thinking")
-        Req.Test.json(conn, success_response("Ok"))
-      end)
+      req =
+        build_req(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          refute Map.has_key?(parsed, "thinking")
+          Req.Test.json(conn, success_response("Ok"))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
 
       assert {:ok, _} =
-               DeepSeekService.chat(req, "deepseek-chat", [msg], [], nil, built_in_tools: [:unknown_tool])
+               DeepSeekService.chat(req, "deepseek-chat", [msg], [], nil,
+                 built_in_tools: [:unknown_tool]
+               )
     end
   end
 end

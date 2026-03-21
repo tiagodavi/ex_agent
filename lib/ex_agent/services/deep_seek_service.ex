@@ -18,7 +18,14 @@ defmodule ExAgent.Services.DeepSeekService do
   @doc """
   Sends a chat completion request to the DeepSeek API.
   """
-  @spec chat(Req.Request.t(), String.t(), [Message.t()], [ExAgent.Tool.t()], String.t() | nil, keyword()) ::
+  @spec chat(
+          Req.Request.t(),
+          String.t(),
+          [Message.t()],
+          [ExAgent.Tool.t()],
+          String.t() | nil,
+          keyword()
+        ) ::
           {:ok, Message.t()} | {:tool_call, String.t(), map()} | {:error, term()}
   def chat(req, model, messages, tools, system_prompt, opts \\ []) do
     opts = NimbleOptions.validate!(opts, @chat_opts_schema)
@@ -36,7 +43,13 @@ defmodule ExAgent.Services.DeepSeekService do
     end
   end
 
-  @spec build_chat_body(String.t(), [Message.t()], [ExAgent.Tool.t()], String.t() | nil, keyword()) :: map()
+  @spec build_chat_body(
+          String.t(),
+          [Message.t()],
+          [ExAgent.Tool.t()],
+          String.t() | nil,
+          keyword()
+        ) :: map()
   defp build_chat_body(model, messages, tools, system_prompt, opts) do
     %{"model" => model, "messages" => build_messages(messages, system_prompt)}
     |> maybe_add_temperature(opts[:temperature])
@@ -115,7 +128,8 @@ defmodule ExAgent.Services.DeepSeekService do
     }
   end
 
-  @spec parse_response(map()) :: {:ok, Message.t()} | {:tool_call, String.t(), map()} | {:error, term()}
+  @spec parse_response(map()) ::
+          {:ok, Message.t()} | {:tool_call, String.t(), map()} | {:error, term()}
   defp parse_response(%{"choices" => [%{"message" => message} | _]}) do
     case message do
       %{"tool_calls" => [%{"function" => %{"name" => name, "arguments" => args}} | _]} ->

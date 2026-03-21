@@ -101,6 +101,12 @@ defmodule ExAgent do
   @spec get_context(GenServer.server()) :: Context.t()
   defdelegate get_context(agent), to: Agent
 
+  @doc """
+  Reset conversation context.
+  """
+  @spec reset(GenServer.server()) :: :ok
+  defdelegate reset(agent), to: Agent
+
   # --- Patterns ---
 
   @doc """

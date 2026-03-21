@@ -35,8 +35,11 @@ defmodule ExAgent.Patterns.SkillsTest do
     end
 
     test "returns first matching skill when multiple match" do
-      {:ok, skill1} = Skill.new(name: "first", system_prompt: "First", activation_fn: fn _ -> true end)
-      {:ok, skill2} = Skill.new(name: "second", system_prompt: "Second", activation_fn: fn _ -> true end)
+      {:ok, skill1} =
+        Skill.new(name: "first", system_prompt: "First", activation_fn: fn _ -> true end)
+
+      {:ok, skill2} =
+        Skill.new(name: "second", system_prompt: "Second", activation_fn: fn _ -> true end)
 
       assert %Skill{name: "first"} = Skills.evaluate_skills([skill1, skill2], Context.new())
     end
@@ -75,7 +78,11 @@ defmodule ExAgent.Patterns.SkillsTest do
     end
 
     test "effective_tools returns base tools when no active skill" do
-      state = %{tools: [%Tool{name: "a", description: "A", parameters: %{}, function: & &1}], active_skill: nil}
+      state = %{
+        tools: [%Tool{name: "a", description: "A", parameters: %{}, function: & &1}],
+        active_skill: nil
+      }
+
       assert length(Skills.effective_tools(state)) == 1
     end
 

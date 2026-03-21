@@ -39,9 +39,10 @@ defmodule ExAgent.Services.OpenAIServiceTest do
   # Happy path tests
   describe "chat/6 success" do
     test "returns assistant message for simple chat" do
-      req = build_req(fn conn ->
-        Req.Test.json(conn, success_response("Hello there!"))
-      end)
+      req =
+        build_req(fn conn ->
+          Req.Test.json(conn, success_response("Hello there!"))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
 
@@ -50,23 +51,25 @@ defmodule ExAgent.Services.OpenAIServiceTest do
     end
 
     test "sends system prompt when provided" do
-      req = build_req(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        [system | _] = parsed["messages"]
-        assert system["role"] == "system"
-        assert system["content"] == "Be helpful"
-        Req.Test.json(conn, success_response("Sure!"))
-      end)
+      req =
+        build_req(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          [system | _] = parsed["messages"]
+          assert system["role"] == "system"
+          assert system["content"] == "Be helpful"
+          Req.Test.json(conn, success_response("Sure!"))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
       assert {:ok, _} = OpenAIService.chat(req, "gpt-4o", [msg], [], "Be helpful")
     end
 
     test "returns tool_call when LLM wants to invoke a tool" do
-      req = build_req(fn conn ->
-        Req.Test.json(conn, tool_call_response("search", %{"query" => "elixir"}))
-      end)
+      req =
+        build_req(fn conn ->
+          Req.Test.json(conn, tool_call_response("search", %{"query" => "elixir"}))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Search for elixir")
 
@@ -78,29 +81,34 @@ defmodule ExAgent.Services.OpenAIServiceTest do
   # Bad path tests
   describe "chat/6 errors" do
     test "returns error for non-200 status" do
-      req = build_req(fn conn ->
-        conn
-        |> Plug.Conn.send_resp(401, Jason.encode!(%{"error" => "unauthorized"}))
-      end)
+      req =
+        build_req(fn conn ->
+          conn
+          |> Plug.Conn.send_resp(401, Jason.encode!(%{"error" => "unauthorized"}))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
       assert {:error, {401, _}} = OpenAIService.chat(req, "gpt-4o", [msg], [], nil)
     end
 
     test "returns error for unexpected response format" do
-      req = build_req(fn conn ->
-        Req.Test.json(conn, %{"unexpected" => "format"})
-      end)
+      req =
+        build_req(fn conn ->
+          Req.Test.json(conn, %{"unexpected" => "format"})
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
-      assert {:error, {:unexpected_response, _}} = OpenAIService.chat(req, "gpt-4o", [msg], [], nil)
+
+      assert {:error, {:unexpected_response, _}} =
+               OpenAIService.chat(req, "gpt-4o", [msg], [], nil)
     end
 
     test "returns error for server errors" do
-      req = build_req(fn conn ->
-        conn
-        |> Plug.Conn.send_resp(500, Jason.encode!(%{"error" => "internal"}))
-      end)
+      req =
+        build_req(fn conn ->
+          conn
+          |> Plug.Conn.send_resp(500, Jason.encode!(%{"error" => "internal"}))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
       assert {:error, {500, _}} = OpenAIService.chat(req, "gpt-4o", [msg], [], nil)
@@ -118,14 +126,15 @@ defmodule ExAgent.Services.OpenAIServiceTest do
           function: & &1
         )
 
-      req = build_req(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        [sent_tool] = parsed["tools"]
-        assert sent_tool["type"] == "function"
-        assert sent_tool["function"]["name"] == "search"
-        Req.Test.json(conn, success_response("Ok"))
-      end)
+      req =
+        build_req(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          [sent_tool] = parsed["tools"]
+          assert sent_tool["type"] == "function"
+          assert sent_tool["function"]["name"] == "search"
+          Req.Test.json(conn, success_response("Ok"))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Search")
       assert {:ok, _} = OpenAIService.chat(req, "gpt-4o", [msg], [tool], nil)
@@ -152,33 +161,38 @@ defmodule ExAgent.Services.OpenAIServiceTest do
     end
 
     test "passes temperature and max_tokens in request" do
-      req = build_req(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        assert parsed["temperature"] == 0.5
-        assert parsed["max_tokens"] == 100
-        Req.Test.json(conn, success_response("Ok"))
-      end)
+      req =
+        build_req(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          assert parsed["temperature"] == 0.5
+          assert parsed["max_tokens"] == 100
+          Req.Test.json(conn, success_response("Ok"))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
 
       assert {:ok, _} =
-               OpenAIService.chat(req, "gpt-4o", [msg], [], nil, temperature: 0.5, max_tokens: 100)
+               OpenAIService.chat(req, "gpt-4o", [msg], [], nil,
+                 temperature: 0.5,
+                 max_tokens: 100
+               )
     end
 
     test "formats user message with attachments as multipart content" do
-      req = build_req(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        [msg] = parsed["messages"]
-        assert msg["role"] == "user"
-        [image_part, text_part] = msg["content"]
-        assert image_part["type"] == "image_url"
-        assert String.starts_with?(image_part["image_url"]["url"], "data:image/png;base64,")
-        assert text_part["type"] == "text"
-        assert text_part["text"] == "Describe this"
-        Req.Test.json(conn, success_response("An image"))
-      end)
+      req =
+        build_req(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          [msg] = parsed["messages"]
+          assert msg["role"] == "user"
+          [image_part, text_part] = msg["content"]
+          assert image_part["type"] == "image_url"
+          assert String.starts_with?(image_part["image_url"]["url"], "data:image/png;base64,")
+          assert text_part["type"] == "text"
+          assert text_part["text"] == "Describe this"
+          Req.Test.json(conn, success_response("An image"))
+        end)
 
       {:ok, msg} =
         Message.new(
@@ -191,17 +205,18 @@ defmodule ExAgent.Services.OpenAIServiceTest do
     end
 
     test "formats assistant message with tool_calls" do
-      req = build_req(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        assistant_msg = Enum.at(parsed["messages"], 1)
-        assert assistant_msg["role"] == "assistant"
-        [tc] = assistant_msg["tool_calls"]
-        assert tc["type"] == "function"
-        assert tc["function"]["name"] == "search"
-        assert Jason.decode!(tc["function"]["arguments"]) == %{"q" => "elixir"}
-        Req.Test.json(conn, success_response("Ok"))
-      end)
+      req =
+        build_req(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          assistant_msg = Enum.at(parsed["messages"], 1)
+          assert assistant_msg["role"] == "assistant"
+          [tc] = assistant_msg["tool_calls"]
+          assert tc["type"] == "function"
+          assert tc["function"]["name"] == "search"
+          assert Jason.decode!(tc["function"]["arguments"]) == %{"q" => "elixir"}
+          Req.Test.json(conn, success_response("Ok"))
+        end)
 
       {:ok, user_msg} = Message.new(role: :user, content: "Search")
 
@@ -216,15 +231,16 @@ defmodule ExAgent.Services.OpenAIServiceTest do
     end
 
     test "formats tool response message with tool_call_id" do
-      req = build_req(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        tool_msg = Enum.at(parsed["messages"], 1)
-        assert tool_msg["role"] == "tool"
-        assert tool_msg["content"] == "result data"
-        assert tool_msg["tool_call_id"] == "search"
-        Req.Test.json(conn, success_response("Ok"))
-      end)
+      req =
+        build_req(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          tool_msg = Enum.at(parsed["messages"], 1)
+          assert tool_msg["role"] == "tool"
+          assert tool_msg["content"] == "result data"
+          assert tool_msg["tool_call_id"] == "search"
+          Req.Test.json(conn, success_response("Ok"))
+        end)
 
       {:ok, user_msg} = Message.new(role: :user, content: "Search")
       {:ok, tool_msg} = Message.new(role: :tool, content: "result data", tool_call_id: "search")
@@ -235,12 +251,13 @@ defmodule ExAgent.Services.OpenAIServiceTest do
 
   describe "built_in_tools" do
     test "adds web_search_options to request body" do
-      req = build_req(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        assert parsed["web_search_options"] == %{}
-        Req.Test.json(conn, success_response("Search results"))
-      end)
+      req =
+        build_req(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          assert parsed["web_search_options"] == %{}
+          Req.Test.json(conn, success_response("Search results"))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Search")
 
@@ -249,12 +266,13 @@ defmodule ExAgent.Services.OpenAIServiceTest do
     end
 
     test "adds web_search_options with user location" do
-      req = build_req(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        assert parsed["web_search_options"]["user_location"] == %{"city" => "Tokyo"}
-        Req.Test.json(conn, success_response("Local results"))
-      end)
+      req =
+        build_req(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          assert parsed["web_search_options"]["user_location"] == %{"city" => "Tokyo"}
+          Req.Test.json(conn, success_response("Local results"))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Search")
 
@@ -265,12 +283,13 @@ defmodule ExAgent.Services.OpenAIServiceTest do
     end
 
     test "ignores unknown built-in tools" do
-      req = build_req(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        refute Map.has_key?(parsed, "web_search_options")
-        Req.Test.json(conn, success_response("Ok"))
-      end)
+      req =
+        build_req(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          refute Map.has_key?(parsed, "web_search_options")
+          Req.Test.json(conn, success_response("Ok"))
+        end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
 

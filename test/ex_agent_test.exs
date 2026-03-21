@@ -25,18 +25,20 @@ defmodule ExAgentTest do
 
   describe "public API" do
     test "start_agent/1 and chat/2 work through the facade" do
-      provider = build_provider(fn conn ->
-        Req.Test.json(conn, success_response("Hello from facade!"))
-      end)
+      provider =
+        build_provider(fn conn ->
+          Req.Test.json(conn, success_response("Hello from facade!"))
+        end)
 
       {:ok, pid} = ExAgent.start_agent(provider: provider)
       assert {:ok, %Message{content: "Hello from facade!"}} = ExAgent.chat(pid, "Hi")
     end
 
     test "stop_agent/1 terminates the agent" do
-      provider = build_provider(fn conn ->
-        Req.Test.json(conn, success_response("Ok"))
-      end)
+      provider =
+        build_provider(fn conn ->
+          Req.Test.json(conn, success_response("Ok"))
+        end)
 
       {:ok, pid} = ExAgent.start_agent(provider: provider)
       assert :ok = ExAgent.stop_agent(pid)
@@ -44,9 +46,10 @@ defmodule ExAgentTest do
     end
 
     test "get_context/1 returns the conversation context" do
-      provider = build_provider(fn conn ->
-        Req.Test.json(conn, success_response("Response"))
-      end)
+      provider =
+        build_provider(fn conn ->
+          Req.Test.json(conn, success_response("Response"))
+        end)
 
       {:ok, pid} = ExAgent.start_agent(provider: provider)
       {:ok, _} = ExAgent.chat(pid, "Hello")

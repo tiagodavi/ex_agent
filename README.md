@@ -170,7 +170,7 @@ Enum.each(context.messages, fn msg ->
 end)
 
 # Reset conversation
-ExAgent.Agent.reset(agent)
+ExAgent.reset(agent)
 
 # Stop the agent
 ExAgent.stop_agent(agent)

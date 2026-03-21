@@ -25,9 +25,10 @@ defmodule ExAgent.Patterns.RouterTest do
   end
 
   defp start_agent(response_content) do
-    provider = build_provider(fn conn ->
-      Req.Test.json(conn, success_response(response_content))
-    end)
+    provider =
+      build_provider(fn conn ->
+        Req.Test.json(conn, success_response(response_content))
+      end)
 
     {:ok, pid} = Agent.start_link(provider: provider)
     pid

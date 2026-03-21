@@ -6,10 +6,11 @@ defmodule ExAgent.Services.OpenAIService do
   OpenAI `/chat/completions` endpoint using Req.
   """
 
+  alias ExAgent.Providers.OpenAI
   alias ExAgent.Message
 
   @chat_opts_schema [
-    temperature: [type: :float, default: 0.1],
+    temperature: [type: :float, default: 0.6],
     max_tokens: [type: :pos_integer, default: 512],
     tool_choice: [type: {:or, [:string, :map]}, default: "auto"],
     built_in_tools: [type: {:list, {:or, [:atom, :map]}}, default: []]
@@ -19,23 +20,34 @@ defmodule ExAgent.Services.OpenAIService do
   Sends a chat completion request to the OpenAI API.
   """
   @spec chat(
-          Req.Request.t(),
-          String.t(),
+          OpenAI.t(),
           [Message.t()],
-          [ExAgent.Tool.t()],
-          String.t() | nil,
           keyword()
         ) ::
           {:ok, Message.t()} | {:tool_call, String.t(), map()} | {:error, term()}
-  def chat(req, model, messages, tools, system_prompt, opts \\ []) do
-    opts = NimbleOptions.validate!(opts, @chat_opts_schema)
-    body = build_chat_body(model, messages, tools, system_prompt, opts)
+  def chat(provider, messages, opts \\ []) do
+    max_tokens = opts[:max_tokens] || provider.max_tokens
+    temperature = opts[:temperature] || provider.temperature
 
-    case Req.post(req,
+    opts = NimbleOptions.validate!(opts, @chat_opts_schema)
+
+    opts =
+      Keyword.merge(opts,
+        temperature: temperature,
+        max_tokens: max_tokens
+      )
+
+    dbg(opts)
+
+    body = build_chat_body(provider.model, messages, provider.tools, provider.system_prompt, opts)
+
+    dbg(body)
+
+    case Req.post(provider.req,
            url: "/chat/completions",
-           json: body
-           #  connect_options: [timeout: :timer.minutes(5)],
-           #  receive_timeout: :timer.minutes(5)
+           json: body,
+           connect_options: [timeout: :timer.minutes(5)],
+           receive_timeout: :timer.minutes(5)
          ) do
       {:ok, %Req.Response{status: 200, body: body}} ->
         parse_response(body)
@@ -75,10 +87,19 @@ defmodule ExAgent.Services.OpenAIService do
        when is_list(attachments) and attachments != [] do
     file_parts =
       Enum.map(attachments, fn %{data: data, mime_type: mime_type} ->
-        %{
-          "type" => "image_url",
-          "image_url" => %{"url" => "data:#{mime_type};base64,#{Base.encode64(data)}"}
-        }
+        if String.starts_with?(mime_type, "image/") do
+          %{
+            "type" => "image_url",
+            "image_url" => %{"url" => "data:#{mime_type};base64,#{Base.encode64(data)}"}
+          }
+        else
+          %{
+            "type" => "file",
+            "file" => %{
+              "file_data" => "data:#{mime_type};base64,#{Base.encode64(data)}"
+            }
+          }
+        end
       end)
 
     %{

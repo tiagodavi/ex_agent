@@ -46,9 +46,10 @@ defmodule ExAgent.AgentTest do
   # Happy path tests
   describe "chat/2" do
     test "returns assistant response for simple message" do
-      provider = build_provider(fn conn ->
-        Req.Test.json(conn, success_response("Hello!"))
-      end)
+      provider =
+        build_provider(fn conn ->
+          Req.Test.json(conn, success_response("Hello!"))
+        end)
 
       {:ok, pid} = Agent.start_link(provider: provider)
       assert {:ok, %Message{role: :assistant, content: "Hello!"}} = Agent.chat(pid, "Hi")
@@ -57,21 +58,22 @@ defmodule ExAgent.AgentTest do
     test "maintains conversation context across messages" do
       call_count = :counters.new(1, [:atomics])
 
-      provider = build_provider(fn conn ->
-        :counters.add(call_count, 1, 1)
-        count = :counters.get(call_count, 1)
+      provider =
+        build_provider(fn conn ->
+          :counters.add(call_count, 1, 1)
+          count = :counters.get(call_count, 1)
 
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
 
-        if count == 2 do
-          # Second call should have both user messages
-          user_msgs = Enum.filter(parsed["messages"], &(&1["role"] == "user"))
-          assert length(user_msgs) == 2
-        end
+          if count == 2 do
+            # Second call should have both user messages
+            user_msgs = Enum.filter(parsed["messages"], &(&1["role"] == "user"))
+            assert length(user_msgs) == 2
+          end
 
-        Req.Test.json(conn, success_response("Reply #{count}"))
-      end)
+          Req.Test.json(conn, success_response("Reply #{count}"))
+        end)
 
       {:ok, pid} = Agent.start_link(provider: provider)
       {:ok, _} = Agent.chat(pid, "First")
@@ -82,16 +84,17 @@ defmodule ExAgent.AgentTest do
     test "executes tools and returns final response" do
       call_count = :counters.new(1, [:atomics])
 
-      provider = build_provider(fn conn ->
-        :counters.add(call_count, 1, 1)
-        count = :counters.get(call_count, 1)
+      provider =
+        build_provider(fn conn ->
+          :counters.add(call_count, 1, 1)
+          count = :counters.get(call_count, 1)
 
-        if count == 1 do
-          Req.Test.json(conn, tool_call_response("search", %{"query" => "elixir"}))
-        else
-          Req.Test.json(conn, success_response("Found results for elixir"))
-        end
-      end)
+          if count == 1 do
+            Req.Test.json(conn, tool_call_response("search", %{"query" => "elixir"}))
+          else
+            Req.Test.json(conn, success_response("Found results for elixir"))
+          end
+        end)
 
       {:ok, tool} =
         Tool.new(
@@ -102,7 +105,9 @@ defmodule ExAgent.AgentTest do
         )
 
       {:ok, pid} = Agent.start_link(provider: provider, tools: [tool])
-      assert {:ok, %Message{content: "Found results for elixir"}} = Agent.chat(pid, "Search elixir")
+
+      assert {:ok, %Message{content: "Found results for elixir"}} =
+               Agent.chat(pid, "Search elixir")
 
       # Tool call flow produces 4 messages: user, assistant-tool-call, tool-result, assistant-final
       context = Agent.get_context(pid)
@@ -110,28 +115,32 @@ defmodule ExAgent.AgentTest do
     end
 
     test "passes file attachments to message" do
-      provider = build_provider(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        [msg] = parsed["messages"]
-        # With attachments, content becomes multipart array
-        assert is_list(msg["content"])
-        Req.Test.json(conn, success_response("I see the image"))
-      end)
+      provider =
+        build_provider(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          [msg] = parsed["messages"]
+          # With attachments, content becomes multipart array
+          assert is_list(msg["content"])
+          Req.Test.json(conn, success_response("I see the image"))
+        end)
 
       {:ok, pid} = Agent.start_link(provider: provider)
 
       assert {:ok, %Message{content: "I see the image"}} =
-               Agent.chat(pid, "Describe this", files: [%{data: "fake_png", mime_type: "image/png"}])
+               Agent.chat(pid, "Describe this",
+                 files: [%{data: "fake_png", mime_type: "image/png"}]
+               )
     end
 
     test "passes built_in_tools to provider" do
-      provider = build_provider(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        assert parsed["web_search_options"] == %{}
-        Req.Test.json(conn, success_response("Search results"))
-      end)
+      provider =
+        build_provider(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          assert parsed["web_search_options"] == %{}
+          Req.Test.json(conn, success_response("Search results"))
+        end)
 
       {:ok, pid} = Agent.start_link(provider: provider)
 
@@ -139,12 +148,13 @@ defmodule ExAgent.AgentTest do
     end
 
     test "uses agent-level built_in_tools as default" do
-      provider = build_provider(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        assert parsed["web_search_options"] == %{}
-        Req.Test.json(conn, success_response("Search results"))
-      end)
+      provider =
+        build_provider(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          assert parsed["web_search_options"] == %{}
+          Req.Test.json(conn, success_response("Search results"))
+        end)
 
       {:ok, pid} = Agent.start_link(provider: provider, built_in_tools: [:web_search])
 
@@ -155,9 +165,10 @@ defmodule ExAgent.AgentTest do
   # Bad path tests
   describe "chat/2 error handling" do
     test "returns error when LLM call fails" do
-      provider = build_provider(fn conn ->
-        conn |> Plug.Conn.send_resp(500, Jason.encode!(%{"error" => "internal"}))
-      end)
+      provider =
+        build_provider(fn conn ->
+          conn |> Plug.Conn.send_resp(500, Jason.encode!(%{"error" => "internal"}))
+        end)
 
       {:ok, pid} = Agent.start_link(provider: provider)
       assert {:error, {500, _}} = Agent.chat(pid, "Hi")
@@ -166,25 +177,27 @@ defmodule ExAgent.AgentTest do
     test "handles unknown tool gracefully" do
       call_count = :counters.new(1, [:atomics])
 
-      provider = build_provider(fn conn ->
-        :counters.add(call_count, 1, 1)
-        count = :counters.get(call_count, 1)
+      provider =
+        build_provider(fn conn ->
+          :counters.add(call_count, 1, 1)
+          count = :counters.get(call_count, 1)
 
-        if count == 1 do
-          Req.Test.json(conn, tool_call_response("unknown_tool", %{}))
-        else
-          Req.Test.json(conn, success_response("Handled gracefully"))
-        end
-      end)
+          if count == 1 do
+            Req.Test.json(conn, tool_call_response("unknown_tool", %{}))
+          else
+            Req.Test.json(conn, success_response("Handled gracefully"))
+          end
+        end)
 
       {:ok, pid} = Agent.start_link(provider: provider)
       assert {:ok, %Message{content: "Handled gracefully"}} = Agent.chat(pid, "Do something")
     end
 
     test "returns error when max tool iterations reached" do
-      provider = build_provider(fn conn ->
-        Req.Test.json(conn, tool_call_response("loop", %{}))
-      end)
+      provider =
+        build_provider(fn conn ->
+          Req.Test.json(conn, tool_call_response("loop", %{}))
+        end)
 
       {:ok, tool} =
         Tool.new(
@@ -235,21 +248,22 @@ defmodule ExAgent.AgentTest do
     test "dynamically adds a skill to the agent" do
       call_count = :counters.new(1, [:atomics])
 
-      provider = build_provider(fn conn ->
-        :counters.add(call_count, 1, 1)
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
+      provider =
+        build_provider(fn conn ->
+          :counters.add(call_count, 1, 1)
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
 
-        # After skill loads, system prompt should be the skill's
-        system_msgs = Enum.filter(parsed["messages"], &(&1["role"] == "system"))
+          # After skill loads, system prompt should be the skill's
+          system_msgs = Enum.filter(parsed["messages"], &(&1["role"] == "system"))
 
-        if length(system_msgs) > 0 do
-          [sys | _] = system_msgs
-          assert sys["content"] == "You are a SQL expert"
-        end
+          if length(system_msgs) > 0 do
+            [sys | _] = system_msgs
+            assert sys["content"] == "You are a SQL expert"
+          end
 
-        Req.Test.json(conn, success_response("SQL response"))
-      end)
+          Req.Test.json(conn, success_response("SQL response"))
+        end)
 
       provider_with_prompt = %{provider | system_prompt: nil}
       {:ok, pid} = Agent.start_link(provider: provider_with_prompt)

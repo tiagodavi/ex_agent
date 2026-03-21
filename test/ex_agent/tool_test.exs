@@ -69,7 +69,12 @@ defmodule ExAgent.ToolTest do
   describe "new/1 edge cases" do
     test "accepts empty parameters map" do
       assert {:ok, %Tool{parameters: %{}}} =
-               Tool.new(name: "noop", description: "No-op", parameters: %{}, function: fn _ -> :ok end)
+               Tool.new(
+                 name: "noop",
+                 description: "No-op",
+                 parameters: %{},
+                 function: fn _ -> :ok end
+               )
     end
 
     test "function can return error tuples" do

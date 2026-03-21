@@ -49,7 +49,7 @@ defmodule ExAgent.Patterns.Handoff do
   def transfer_context(context, %{"summary" => summary}) do
     {:ok, msg} =
       Message.new(
-        role: :system,
+        role: :user,
         content: "Handoff received. Previous context summary: #{summary}"
       )
 

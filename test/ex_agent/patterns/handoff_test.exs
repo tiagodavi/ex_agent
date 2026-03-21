@@ -93,14 +93,15 @@ defmodule ExAgent.Patterns.HandoffTest do
     end
 
     test "agent can respond after receiving handoff" do
-      provider = build_provider(fn conn ->
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
-        parsed = Jason.decode!(body)
-        msgs = parsed["messages"]
-        # Should have the handoff system message + new user message
-        assert length(msgs) >= 2
-        Req.Test.json(conn, success_response("Handled after handoff"))
-      end)
+      provider =
+        build_provider(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          msgs = parsed["messages"]
+          # Should have the handoff system message + new user message
+          assert length(msgs) >= 2
+          Req.Test.json(conn, success_response("Handled after handoff"))
+        end)
 
       {:ok, target_pid} = Agent.start_link(provider: provider)
 
@@ -116,34 +117,38 @@ defmodule ExAgent.Patterns.HandoffTest do
     test "handoff tool triggers handoff response from agent" do
       call_count = :counters.new(1, [:atomics])
 
-      provider = build_provider(fn conn ->
-        :counters.add(call_count, 1, 1)
-        count = :counters.get(call_count, 1)
+      provider =
+        build_provider(fn conn ->
+          :counters.add(call_count, 1, 1)
+          count = :counters.get(call_count, 1)
 
-        if count == 1 do
-          response = %{
-            "choices" => [
-              %{
-                "message" => %{
-                  "tool_calls" => [
-                    %{
-                      "function" => %{
-                        "name" => "handoff_to_support",
-                        "arguments" => Jason.encode!(%{"summary" => "Needs help"})
+          if count == 1 do
+            response = %{
+              "choices" => [
+                %{
+                  "message" => %{
+                    "tool_calls" => [
+                      %{
+                        "function" => %{
+                          "name" => "handoff_to_support",
+                          "arguments" => Jason.encode!(%{"summary" => "Needs help"})
+                        }
                       }
-                    }
-                  ]
+                    ]
+                  }
                 }
-              }
-            ]
-          }
-          Req.Test.json(conn, response)
-        else
-          Req.Test.json(conn, success_response("Should not reach here"))
-        end
-      end)
+              ]
+            }
 
-      target_provider = build_provider(fn conn -> Req.Test.json(conn, success_response("Support here")) end)
+            Req.Test.json(conn, response)
+          else
+            Req.Test.json(conn, success_response("Should not reach here"))
+          end
+        end)
+
+      target_provider =
+        build_provider(fn conn -> Req.Test.json(conn, success_response("Support here")) end)
+
       {:ok, target_pid} = Agent.start_link(provider: target_provider)
 
       handoff_tool = Handoff.build_handoff_tool("support", target_pid, "Transfer to support")

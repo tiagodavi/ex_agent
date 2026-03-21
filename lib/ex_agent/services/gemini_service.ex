@@ -23,7 +23,14 @@ defmodule ExAgent.Services.GeminiService do
   @doc """
   Sends a chat completion request to the Gemini API.
   """
-  @spec chat(Req.Request.t(), String.t(), [Message.t()], [ExAgent.Tool.t()], String.t() | nil, keyword()) ::
+  @spec chat(
+          Req.Request.t(),
+          String.t(),
+          [Message.t()],
+          [ExAgent.Tool.t()],
+          String.t() | nil,
+          keyword()
+        ) ::
           {:ok, Message.t()} | {:tool_call, String.t(), map()} | {:error, term()}
   def chat(req, model, messages, tools, system_prompt, opts \\ []) do
     opts = NimbleOptions.validate!(opts, @chat_opts_schema)
@@ -140,7 +147,8 @@ defmodule ExAgent.Services.GeminiService do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  @spec parse_response(map()) :: {:ok, Message.t()} | {:tool_call, String.t(), map()} | {:error, term()}
+  @spec parse_response(map()) ::
+          {:ok, Message.t()} | {:tool_call, String.t(), map()} | {:error, term()}
   defp parse_response(%{"candidates" => [%{"content" => %{"parts" => parts}} | _]}) do
     case parts do
       [%{"functionCall" => %{"name" => name, "args" => args}} | _] ->

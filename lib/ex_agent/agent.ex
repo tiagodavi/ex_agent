@@ -145,15 +145,14 @@ defmodule ExAgent.Agent do
     {:ok, user_msg} = Message.new(role: :user, content: user_input, attachments: attachments)
 
     # Per-message built_in_tools override, or fall back to agent-level default
-    chat_built_in_tools =
-      Keyword.get(opts, :built_in_tools, state.built_in_tools)
+    opts = Keyword.merge([built_in_tools: state.built_in_tools], opts)
 
     state = %{state | context: Context.add_message(state.context, user_msg), status: :processing}
 
     # Evaluate skills before calling LLM
     state = evaluate_and_apply_skills(state)
 
-    case run_tool_loop(state, chat_built_in_tools, 0) do
+    case run_tool_loop(state, opts, 0) do
       {:ok, response_msg, new_state} ->
         {:reply, {:ok, response_msg}, %{new_state | status: :idle}}
 
@@ -191,16 +190,16 @@ defmodule ExAgent.Agent do
           {:ok, Message.t(), state()}
           | {:handoff, pid() | atom(), Context.t(), state()}
           | {:error, term(), state()}
-  defp run_tool_loop(state, _built_in_tools, iteration) when iteration >= @max_tool_iterations do
+  defp run_tool_loop(state, _opts, iteration) when iteration >= @max_tool_iterations do
     {:error, :max_tool_iterations_reached, state}
   end
 
-  defp run_tool_loop(state, built_in_tools, iteration) do
+  defp run_tool_loop(state, opts, iteration) do
     effective_tools = get_effective_tools(state)
     messages = state.context.messages
     provider = %{state.provider | tools: effective_tools}
 
-    case LlmProvider.chat(provider, messages, built_in_tools: built_in_tools) do
+    case LlmProvider.chat(provider, messages, opts) do
       {:ok, %Message{} = response_msg} ->
         new_context = Context.add_message(state.context, response_msg)
         {:ok, response_msg, %{state | context: new_context}}
@@ -225,14 +224,14 @@ defmodule ExAgent.Agent do
               Message.new(role: :tool, content: to_string(result), tool_call_id: name)
 
             new_context = Context.add_message(state.context, tool_msg)
-            run_tool_loop(%{state | context: new_context}, built_in_tools, iteration + 1)
+            run_tool_loop(%{state | context: new_context}, opts, iteration + 1)
 
           {:error, reason} ->
             {:ok, error_msg} =
               Message.new(role: :tool, content: "Error: #{inspect(reason)}", tool_call_id: name)
 
             new_context = Context.add_message(state.context, error_msg)
-            run_tool_loop(%{state | context: new_context}, built_in_tools, iteration + 1)
+            run_tool_loop(%{state | context: new_context}, opts, iteration + 1)
         end
 
       {:error, reason} ->
@@ -243,8 +242,11 @@ defmodule ExAgent.Agent do
   @spec execute_tool(String.t(), map(), [Tool.t()]) :: any()
   defp execute_tool(name, args, tools) do
     case Enum.find(tools, &(&1.name == name)) do
-      nil -> {:error, "unknown tool: #{name}"}
-      %Tool{function: fun} -> fun.(args)
+      nil ->
+        {:error, "unknown tool: #{name}"}
+
+      %Tool{function: fun} ->
+        fun.(args)
     end
   end
 

@@ -54,9 +54,14 @@ defmodule ExAgent.Patterns.Subagents do
     provider = %{provider | tools: spec[:tools] || []}
 
     case LlmProvider.chat(provider, [user_msg], []) do
-      {:ok, %Message{content: content}} -> {:ok, content}
-      {:error, reason} -> {:error, reason}
-      {:tool_call, _name, _args} -> {:ok, "Subagent requested a tool call but tools are not executed in subagent mode."}
+      {:ok, %Message{content: content}} ->
+        {:ok, content}
+
+      {:error, reason} ->
+        {:error, reason}
+
+      {:tool_call, _name, _args} ->
+        {:ok, "Subagent requested a tool call but tools are not executed in subagent mode."}
     end
   end
 
