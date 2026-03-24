@@ -67,4 +67,55 @@ defmodule ExAgent.Providers.OpenAITest do
       assert provider.system_prompt == nil
     end
   end
+
+  # FileUploader protocol tests
+  describe "FileUploader.upload/4" do
+    test "uploads a file and returns a FileRef" do
+      provider = %OpenAI{
+        api_key: "sk-test",
+        model: "gpt-4o",
+        base_url: "https://api.openai.com/v1",
+        temperature: 0.6,
+        max_tokens: 512,
+        tools: [],
+        req:
+          Req.new(
+            plug: fn conn ->
+              Req.Test.json(conn, %{
+                "id" => "file-upload123",
+                "object" => "file",
+                "bytes" => 100,
+                "filename" => "test.pdf",
+                "purpose" => "user_data"
+              })
+            end
+          )
+      }
+
+      assert {:ok, %ExAgent.FileRef{provider: :openai, file_id: "file-upload123"}} =
+               ExAgent.FileUploader.upload(provider, "pdf data", "application/pdf",
+                 filename: "test.pdf"
+               )
+    end
+
+    test "returns error on upload failure" do
+      provider = %OpenAI{
+        api_key: "sk-test",
+        model: "gpt-4o",
+        base_url: "https://api.openai.com/v1",
+        temperature: 0.6,
+        max_tokens: 512,
+        tools: [],
+        req:
+          Req.new(
+            plug: fn conn ->
+              conn |> Plug.Conn.send_resp(401, Jason.encode!(%{"error" => "unauthorized"}))
+            end
+          )
+      }
+
+      assert {:error, {401, _}} =
+               ExAgent.FileUploader.upload(provider, "data", "text/plain")
+    end
+  end
 end

@@ -178,14 +178,14 @@ ExAgent.stop_agent(agent)
 
 ## File Attachments
 
-Send images, PDFs, and other files alongside chat messages. Files become part of the conversation context, so the LLM can reference them in follow-up messages.
+Send images, PDFs, and other files alongside chat messages. Files become part of the conversation context, so the LLM can reference them in follow-up messages. You can either send files inline (base64-encoded) or upload them first for better performance.
 
 ```elixir
-# Attach a file by path
+# Attach a file by path (inline base64)
 {:ok, response} = ExAgent.chat(agent, "Describe this image",
   files: [%{path: "photo.jpg", mime_type: "image/jpeg"}])
 
-# Attach raw binary data
+# Attach raw binary data (inline base64)
 image_data = File.read!("diagram.png")
 {:ok, response} = ExAgent.chat(agent, "What's in this diagram?",
   files: [%{data: image_data, mime_type: "image/png"}])
@@ -216,6 +216,66 @@ image_data = File.read!("diagram.png")
 | CSV | `text/csv` | Yes | Yes | No |
 
 > **Note:** DeepSeek does not support multimodal input. File attachments on DeepSeek agents are silently ignored.
+
+## File Uploads
+
+For large files or when you want to reuse the same file across multiple conversations, upload the file first and reference it later. This avoids sending base64-encoded data with every chat request.
+
+### Upload and Reference (OpenAI)
+
+```elixir
+provider = ExAgent.Providers.OpenAI.new(api_key: System.get_env("OPENAI_API_KEY"))
+
+# Upload a file from disk
+{:ok, ref} = ExAgent.upload_file(provider, "report.pdf", "application/pdf")
+
+# Use the reference in chat — no base64 encoding, just a lightweight file ID
+{:ok, agent} = ExAgent.start_agent(provider: provider)
+{:ok, response} = ExAgent.chat(agent, "Summarize this report",
+  files: [%{file_ref: ref}])
+
+# Reuse the same reference in another message
+{:ok, response} = ExAgent.chat(agent, "What are the key findings?",
+  files: [%{file_ref: ref}])
+```
+
+### Upload and Reference (Gemini)
+
+```elixir
+provider = ExAgent.Providers.Gemini.new(api_key: System.get_env("GEMINI_API_KEY"))
+
+# Upload a file — Gemini files expire after 48 hours
+{:ok, ref} = ExAgent.upload_file(provider, "photo.jpg", "image/jpeg")
+
+# Check if a reference has expired
+ExAgent.FileRef.expired?(ref)
+
+# Use in chat
+{:ok, agent} = ExAgent.start_agent(provider: provider)
+{:ok, response} = ExAgent.chat(agent, "Describe what you see",
+  files: [%{file_ref: ref}])
+```
+
+### Upload Raw Binary Data
+
+```elixir
+# If you already have the file contents in memory
+image_bytes = File.read!("screenshot.png")
+{:ok, ref} = ExAgent.upload_data(provider, image_bytes, "image/png",
+  filename: "screenshot.png")
+```
+
+### Mix Inline and Uploaded Files
+
+```elixir
+# You can combine both approaches in a single message
+{:ok, ref} = ExAgent.upload_file(provider, "large_video.mp4", "video/mp4")
+{:ok, response} = ExAgent.chat(agent, "Compare these",
+  files: [
+    %{file_ref: ref},                                          # uploaded reference
+    %{path: "small_image.jpg", mime_type: "image/jpeg"}        # inline base64
+  ])
+```
 
 ## Built-in Provider Tools
 
@@ -645,6 +705,8 @@ lib/
   ex_agent.ex                     # Public API facade
   ex_agent/
     llm_provider.ex               # LlmProvider protocol
+    file_uploader.ex              # FileUploader protocol
+    file_ref.ex                   # %FileRef{} struct (uploaded file reference)
     message.ex                    # %Message{} struct
     tool.ex                       # %Tool{} struct
     context.ex                    # %Context{} struct
@@ -653,12 +715,14 @@ lib/
     supervisor.ex                 # AgentSupervisor
     dynamic_supervisor.ex         # AgentDynamicSupervisor
     providers/
-      openai.ex                   # OpenAI provider + protocol impl
-      gemini.ex                   # Gemini provider + protocol impl
-      deep_seek.ex                # DeepSeek provider + protocol impl
+      openai.ex                   # OpenAI provider + LlmProvider + FileUploader
+      gemini.ex                   # Gemini provider + LlmProvider + FileUploader
+      deep_seek.ex                # DeepSeek provider + LlmProvider
     services/
-      openai_service.ex           # OpenAI HTTP calls via Req
-      gemini_service.ex           # Gemini HTTP calls via Req
+      openai_service.ex           # OpenAI chat HTTP calls via Req
+      openai_upload_service.ex    # OpenAI file upload (POST /v1/files)
+      gemini_service.ex           # Gemini chat HTTP calls via Req
+      gemini_upload_service.ex    # Gemini file upload (Files API)
       deep_seek_service.ex        # DeepSeek HTTP calls via Req
     patterns/
       subagents.ex                # Centralized orchestration

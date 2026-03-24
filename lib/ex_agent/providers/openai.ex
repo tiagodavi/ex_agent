@@ -79,4 +79,10 @@ defmodule ExAgent.Providers.OpenAI do
       )
     end
   end
+
+  defimpl ExAgent.FileUploader do
+    def upload(provider, file_data, mime_type, opts \\ []) do
+      ExAgent.Services.OpenAIUploadService.upload(provider.req, file_data, mime_type, opts)
+    end
+  end
 end

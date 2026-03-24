@@ -8,7 +8,7 @@ defmodule ExAgent.Message do
 
   @type role :: :system | :user | :assistant | :tool
 
-  @type attachment :: %{data: binary(), mime_type: String.t()}
+  @type attachment :: %{data: binary(), mime_type: String.t()} | %{file_ref: ExAgent.FileRef.t()}
 
   @type t :: %__MODULE__{
           role: role(),
@@ -84,19 +84,29 @@ defmodule ExAgent.Message do
   defp validate_attachments(_), do: {:error, "attachments must be a list"}
 
   @spec resolve_attachment(map()) :: {:ok, attachment()} | {:error, String.t()}
-  defp resolve_attachment(%{data: data, mime_type: mime_type})
+  defp resolve_attachment(%{file_ref: %ExAgent.FileRef{} = ref}) do
+    {:ok, %{file_ref: ref}}
+  end
+
+  defp resolve_attachment(%{data: data, mime_type: mime_type} = att)
        when is_binary(data) and is_binary(mime_type) do
-    {:ok, %{data: data, mime_type: mime_type}}
+    base = %{data: data, mime_type: mime_type}
+
+    case Map.get(att, :filename) do
+      nil -> {:ok, base}
+      filename when is_binary(filename) -> {:ok, Map.put(base, :filename, filename)}
+      _ -> {:ok, base}
+    end
   end
 
   defp resolve_attachment(%{path: path, mime_type: mime_type})
        when is_binary(path) and is_binary(mime_type) do
     case File.read(path) do
-      {:ok, data} -> {:ok, %{data: data, mime_type: mime_type}}
+      {:ok, data} -> {:ok, %{data: data, mime_type: mime_type, filename: Path.basename(path)}}
       {:error, reason} -> {:error, "failed to read file #{path}: #{inspect(reason)}"}
     end
   end
 
   defp resolve_attachment(_),
-    do: {:error, "each attachment must have :mime_type and either :data or :path"}
+    do: {:error, "each attachment must have :mime_type and either :data, :path, or :file_ref"}
 end

@@ -65,14 +65,7 @@ defmodule ExAgent.Providers.DeepSeek do
 
   defimpl ExAgent.LlmProvider do
     def chat(provider, messages, opts \\ []) do
-      ExAgent.Services.DeepSeekService.chat(
-        provider.req,
-        provider.model,
-        messages,
-        provider.tools,
-        provider.system_prompt,
-        opts
-      )
+      ExAgent.Services.DeepSeekService.chat(provider, messages, opts)
     end
   end
 end

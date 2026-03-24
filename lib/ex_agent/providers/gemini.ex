@@ -70,14 +70,13 @@ defmodule ExAgent.Providers.Gemini do
 
   defimpl ExAgent.LlmProvider do
     def chat(provider, messages, opts \\ []) do
-      ExAgent.Services.GeminiService.chat(
-        provider.req,
-        provider.model,
-        messages,
-        provider.tools,
-        provider.system_prompt,
-        opts
-      )
+      ExAgent.Services.GeminiService.chat(provider, messages, opts)
+    end
+  end
+
+  defimpl ExAgent.FileUploader do
+    def upload(provider, file_data, mime_type, opts \\ []) do
+      ExAgent.Services.GeminiUploadService.upload(provider.api_key, file_data, mime_type, opts)
     end
   end
 end

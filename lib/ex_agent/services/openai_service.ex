@@ -7,7 +7,7 @@ defmodule ExAgent.Services.OpenAIService do
   """
 
   alias ExAgent.Providers.OpenAI
-  alias ExAgent.Message
+  alias ExAgent.{FileRef, Message}
 
   @chat_opts_schema [
     temperature: [type: :float, default: 0.6],
@@ -29,7 +29,10 @@ defmodule ExAgent.Services.OpenAIService do
     max_tokens = opts[:max_tokens] || provider.max_tokens
     temperature = opts[:temperature] || provider.temperature
 
-    opts = NimbleOptions.validate!(opts, @chat_opts_schema)
+    opts =
+      opts
+      |> Keyword.take(Keyword.keys(@chat_opts_schema))
+      |> NimbleOptions.validate!(@chat_opts_schema)
 
     opts =
       Keyword.merge(opts,
@@ -37,11 +40,7 @@ defmodule ExAgent.Services.OpenAIService do
         max_tokens: max_tokens
       )
 
-    dbg(opts)
-
     body = build_chat_body(provider.model, messages, provider.tools, provider.system_prompt, opts)
-
-    dbg(body)
 
     case Req.post(provider.req,
            url: "/chat/completions",
@@ -85,22 +84,7 @@ defmodule ExAgent.Services.OpenAIService do
   @spec format_message(Message.t()) :: map()
   defp format_message(%Message{role: :user, content: content, attachments: attachments})
        when is_list(attachments) and attachments != [] do
-    file_parts =
-      Enum.map(attachments, fn %{data: data, mime_type: mime_type} ->
-        if String.starts_with?(mime_type, "image/") do
-          %{
-            "type" => "image_url",
-            "image_url" => %{"url" => "data:#{mime_type};base64,#{Base.encode64(data)}"}
-          }
-        else
-          %{
-            "type" => "file",
-            "file" => %{
-              "file_data" => "data:#{mime_type};base64,#{Base.encode64(data)}"
-            }
-          }
-        end
-      end)
+    file_parts = Enum.map(attachments, &format_attachment/1)
 
     %{
       "role" => "user",
@@ -130,6 +114,34 @@ defmodule ExAgent.Services.OpenAIService do
 
   defp format_message(%Message{role: role, content: content}) do
     %{"role" => to_string(role), "content" => content}
+  end
+
+  @spec format_attachment(map()) :: map()
+  defp format_attachment(%{file_ref: %FileRef{provider: :openai, file_id: fid, mime_type: mt}}) do
+    if String.starts_with?(mt, "image/") do
+      %{"type" => "image_file", "image_file" => %{"file_id" => fid}}
+    else
+      %{"type" => "file", "file" => %{"file_id" => fid}}
+    end
+  end
+
+  defp format_attachment(%{data: data, mime_type: mime_type} = att) do
+    if String.starts_with?(mime_type, "image/") do
+      %{
+        "type" => "image_url",
+        "image_url" => %{"url" => "data:#{mime_type};base64,#{Base.encode64(data)}"}
+      }
+    else
+      filename = Map.get(att, :filename, "upload")
+
+      %{
+        "type" => "file",
+        "file" => %{
+          "filename" => filename,
+          "file_data" => "data:#{mime_type};base64,#{Base.encode64(data)}"
+        }
+      }
+    end
   end
 
   defp maybe_add_temperature(body, nil), do: body

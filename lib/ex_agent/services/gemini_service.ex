@@ -6,7 +6,8 @@ defmodule ExAgent.Services.GeminiService do
   Gemini `generateContent` endpoint using Req.
   """
 
-  alias ExAgent.Message
+  alias ExAgent.{FileRef, Message}
+  alias ExAgent.Providers.Gemini
 
   @chat_opts_schema [
     temperature: [type: :float, default: 0.7],
@@ -24,19 +25,20 @@ defmodule ExAgent.Services.GeminiService do
   Sends a chat completion request to the Gemini API.
   """
   @spec chat(
-          Req.Request.t(),
-          String.t(),
+          Gemini.t(),
           [Message.t()],
-          [ExAgent.Tool.t()],
-          String.t() | nil,
           keyword()
         ) ::
           {:ok, Message.t()} | {:tool_call, String.t(), map()} | {:error, term()}
-  def chat(req, model, messages, tools, system_prompt, opts \\ []) do
-    opts = NimbleOptions.validate!(opts, @chat_opts_schema)
-    body = build_chat_body(messages, tools, system_prompt, opts)
+  def chat(%Gemini{} = provider, messages, opts \\ []) do
+    opts =
+      opts
+      |> Keyword.take(Keyword.keys(@chat_opts_schema))
+      |> NimbleOptions.validate!(@chat_opts_schema)
 
-    case Req.post(req, url: "/models/#{model}:generateContent", json: body) do
+    body = build_chat_body(messages, provider.tools, provider.system_prompt, opts)
+
+    case Req.post(provider.req, url: "/models/#{provider.model}:generateContent", json: body) do
       {:ok, %Req.Response{status: 200, body: body}} ->
         parse_response(body)
 
@@ -60,10 +62,7 @@ defmodule ExAgent.Services.GeminiService do
   @spec format_content(Message.t()) :: map()
   defp format_content(%Message{role: :user, content: content, attachments: attachments})
        when is_list(attachments) and attachments != [] do
-    file_parts =
-      Enum.map(attachments, fn %{data: data, mime_type: mime_type} ->
-        %{"inline_data" => %{"mime_type" => mime_type, "data" => Base.encode64(data)}}
-      end)
+    file_parts = Enum.map(attachments, &format_attachment/1)
 
     %{"role" => "user", "parts" => file_parts ++ [%{"text" => content}]}
   end
@@ -102,6 +101,15 @@ defmodule ExAgent.Services.GeminiService do
 
   defp format_content(%Message{role: :system, content: content}) do
     %{"role" => "user", "parts" => [%{"text" => content}]}
+  end
+
+  @spec format_attachment(map()) :: map()
+  defp format_attachment(%{file_ref: %FileRef{provider: :gemini, file_uri: uri, mime_type: mt}}) do
+    %{"file_data" => %{"file_uri" => uri, "mime_type" => mt}}
+  end
+
+  defp format_attachment(%{data: data, mime_type: mime_type}) do
+    %{"inline_data" => %{"mime_type" => mime_type, "data" => Base.encode64(data)}}
   end
 
   defp maybe_add_system_instruction(body, nil), do: body

@@ -7,6 +7,7 @@ defmodule ExAgent.Services.DeepSeekService do
   """
 
   alias ExAgent.Message
+  alias ExAgent.Providers.DeepSeek
 
   @chat_opts_schema [
     temperature: [type: :float, default: 0.7],
@@ -19,19 +20,20 @@ defmodule ExAgent.Services.DeepSeekService do
   Sends a chat completion request to the DeepSeek API.
   """
   @spec chat(
-          Req.Request.t(),
-          String.t(),
+          DeepSeek.t(),
           [Message.t()],
-          [ExAgent.Tool.t()],
-          String.t() | nil,
           keyword()
         ) ::
           {:ok, Message.t()} | {:tool_call, String.t(), map()} | {:error, term()}
-  def chat(req, model, messages, tools, system_prompt, opts \\ []) do
-    opts = NimbleOptions.validate!(opts, @chat_opts_schema)
-    body = build_chat_body(model, messages, tools, system_prompt, opts)
+  def chat(%DeepSeek{} = provider, messages, opts \\ []) do
+    opts =
+      opts
+      |> Keyword.take(Keyword.keys(@chat_opts_schema))
+      |> NimbleOptions.validate!(@chat_opts_schema)
 
-    case Req.post(req, url: "/chat/completions", json: body) do
+    body = build_chat_body(provider.model, messages, provider.tools, provider.system_prompt, opts)
+
+    case Req.post(provider.req, url: "/chat/completions", json: body) do
       {:ok, %Req.Response{status: 200, body: body}} ->
         parse_response(body)
 
@@ -84,6 +86,14 @@ defmodule ExAgent.Services.DeepSeekService do
 
   defp format_message(%Message{role: :tool, content: content, tool_call_id: tool_call_id}) do
     %{"role" => "tool", "content" => content, "tool_call_id" => tool_call_id}
+  end
+
+  defp format_message(%Message{role: :user, attachments: attachments})
+       when is_list(attachments) and attachments != [] do
+    raise ArgumentError,
+          "DeepSeek does not support file attachments. " <>
+            "#{length(attachments)} attachment(s) were provided but cannot be sent. " <>
+            "Consider using OpenAI or Gemini for file-based interactions."
   end
 
   defp format_message(%Message{role: role, content: content}) do

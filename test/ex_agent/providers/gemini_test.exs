@@ -63,4 +63,67 @@ defmodule ExAgent.Providers.GeminiTest do
       assert provider.tools == []
     end
   end
+
+  # FileUploader protocol tests
+  describe "FileUploader.upload/4" do
+    test "uploads a file and returns a FileRef" do
+      req =
+        Req.new(
+          plug: fn conn ->
+            Req.Test.json(conn, %{
+              "file" => %{
+                "name" => "files/gemini123",
+                "displayName" => "photo.jpg",
+                "mimeType" => "image/jpeg",
+                "uri" => "https://generativelanguage.googleapis.com/v1beta/files/gemini123",
+                "state" => "ACTIVE",
+                "expirationTime" => "2026-03-24T12:00:00Z"
+              }
+            })
+          end
+        )
+
+      provider = %Gemini{
+        api_key: "AIza-test",
+        model: "gemini-2.0-flash",
+        base_url: "https://generativelanguage.googleapis.com/v1beta",
+        tools: [],
+        req: req
+      }
+
+      assert {:ok,
+              %ExAgent.FileRef{
+                provider: :gemini,
+                file_uri: "https://generativelanguage.googleapis.com/v1beta/files/gemini123"
+              }} =
+               ExAgent.FileUploader.upload(provider, "jpeg data", "image/jpeg",
+                 filename: "photo.jpg",
+                 req: req,
+                 upload_url: "http://localhost/upload/v1beta/files"
+               )
+    end
+
+    test "returns error on upload failure" do
+      req =
+        Req.new(
+          plug: fn conn ->
+            conn |> Plug.Conn.send_resp(403, Jason.encode!(%{"error" => "forbidden"}))
+          end
+        )
+
+      provider = %Gemini{
+        api_key: "AIza-test",
+        model: "gemini-2.0-flash",
+        base_url: "https://generativelanguage.googleapis.com/v1beta",
+        tools: [],
+        req: req
+      }
+
+      assert {:error, {403, _}} =
+               ExAgent.FileUploader.upload(provider, "data", "text/plain",
+                 req: req,
+                 upload_url: "http://localhost/upload/v1beta/files"
+               )
+    end
+  end
 end

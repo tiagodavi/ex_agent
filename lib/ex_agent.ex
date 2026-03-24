@@ -25,7 +25,7 @@ defmodule ExAgent do
   - **Router** - Parallel dispatch and synthesis across agents
   """
 
-  alias ExAgent.{Agent, Context}
+  alias ExAgent.{Agent, Context, FileRef, FileUploader}
   alias ExAgent.Patterns.{Handoff, Router}
 
   # --- Agent Lifecycle ---
@@ -106,6 +106,55 @@ defmodule ExAgent do
   """
   @spec reset(GenServer.server()) :: :ok
   defdelegate reset(agent), to: Agent
+
+  # --- File Uploads ---
+
+  @doc """
+  Uploads a file from disk to the provider and returns a reference.
+
+  The returned `FileRef` can be passed in chat messages via
+  `files: [%{file_ref: ref}]` to avoid sending base64-encoded data inline.
+
+  ## Options
+
+  - `:filename` - override filename (defaults to basename of `file_path`)
+  - `:purpose` - OpenAI-specific file purpose (default: `"user_data"`)
+
+  ## Examples
+
+      provider = ExAgent.Providers.OpenAI.new(api_key: "sk-...")
+      {:ok, ref} = ExAgent.upload_file(provider, "report.pdf", "application/pdf")
+      {:ok, response} = ExAgent.chat(agent, "Summarize", files: [%{file_ref: ref}])
+  """
+  @spec upload_file(struct(), String.t(), String.t(), keyword()) ::
+          {:ok, FileRef.t()} | {:error, term()}
+  def upload_file(provider, file_path, mime_type, opts \\ []) do
+    with {:ok, data} <- File.read(file_path) do
+      opts = Keyword.put_new(opts, :filename, Path.basename(file_path))
+      FileUploader.upload(provider, data, mime_type, opts)
+    end
+  end
+
+  @doc """
+  Uploads raw binary data to the provider and returns a reference.
+
+  Use this when you already have file contents in memory.
+
+  ## Options
+
+  - `:filename` - filename for the upload (default: `"upload"`)
+  - `:purpose` - OpenAI-specific file purpose (default: `"user_data"`)
+
+  ## Examples
+
+      image_bytes = File.read!("screenshot.png")
+      {:ok, ref} = ExAgent.upload_data(provider, image_bytes, "image/png", filename: "screenshot.png")
+  """
+  @spec upload_data(struct(), binary(), String.t(), keyword()) ::
+          {:ok, FileRef.t()} | {:error, term()}
+  def upload_data(provider, data, mime_type, opts \\ []) do
+    FileUploader.upload(provider, data, mime_type, opts)
+  end
 
   # --- Patterns ---
 

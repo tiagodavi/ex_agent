@@ -43,20 +43,20 @@ defmodule ExAgent.Patterns.HandoffTest do
       {:handoff, _target, context} = tool.function.(%{"summary" => "Billing issue"})
 
       [msg] = context.messages
-      assert msg.role == :system
+      assert msg.role == :user
       assert String.contains?(msg.content, "Billing issue")
     end
   end
 
   # Bad path / transfer_context tests
   describe "transfer_context/2" do
-    test "adds handoff summary as system message" do
+    test "adds handoff summary as user message" do
       context = Context.new()
       new_context = Handoff.transfer_context(context, %{"summary" => "User wants refund"})
 
       assert length(new_context.messages) == 1
       [msg] = new_context.messages
-      assert msg.role == :system
+      assert msg.role == :user
       assert String.contains?(msg.content, "User wants refund")
     end
 
