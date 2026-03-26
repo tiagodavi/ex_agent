@@ -15,8 +15,8 @@ defmodule ExAgent.Providers.OpenAI do
           api_key: String.t(),
           model: String.t(),
           base_url: String.t(),
-          temperature: float(),
-          max_tokens: integer(),
+          temperature: float() | nil,
+          max_tokens: integer() | nil,
           system_prompt: String.t() | nil,
           tools: [ExAgent.Tool.t()],
           req: Req.Request.t() | nil
@@ -38,8 +38,8 @@ defmodule ExAgent.Providers.OpenAI do
     api_key: [type: :string, required: true, doc: "OpenAI API key"],
     model: [type: :string, default: "gpt-4o", doc: "Model name"],
     base_url: [type: :string, default: "https://api.openai.com/v1", doc: "API base URL"],
-    temperature: [type: :float, default: 0.6],
-    max_tokens: [type: :pos_integer, default: 512],
+    temperature: [type: {:or, [:float, nil]}, default: 0.6],
+    max_tokens: [type: {:or, [:pos_integer, nil]}, default: 512],
     system_prompt: [type: {:or, [:string, nil]}, default: nil, doc: "System prompt"],
     tools: [type: {:list, :any}, default: [], doc: "Available tools"]
   ]

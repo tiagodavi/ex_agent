@@ -10,8 +10,8 @@ defmodule ExAgent.Services.OpenAIService do
   alias ExAgent.{FileRef, Message}
 
   @chat_opts_schema [
-    temperature: [type: :float, default: 0.6],
-    max_tokens: [type: :pos_integer, default: 512],
+    temperature: [type: {:or, [:float, nil]}, default: 0.6],
+    max_tokens: [type: {:or, [:pos_integer, nil]}, default: 512],
     tool_choice: [type: {:or, [:string, :map]}, default: "auto"],
     built_in_tools: [type: {:list, {:or, [:atom, :map]}}, default: []]
   ]
