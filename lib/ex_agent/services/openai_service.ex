@@ -25,7 +25,7 @@ defmodule ExAgent.Services.OpenAIService do
           keyword()
         ) ::
           {:ok, Message.t()} | {:tool_call, String.t(), map()} | {:error, term()}
-  def chat(provider, messages, opts \\ []) do
+  def chat(%OpenAI{} = provider, messages, opts \\ []) do
     max_tokens = opts[:max_tokens] || provider.max_tokens
     temperature = opts[:temperature] || provider.temperature
 

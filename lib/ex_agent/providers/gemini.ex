@@ -15,6 +15,8 @@ defmodule ExAgent.Providers.Gemini do
           api_key: String.t(),
           model: String.t(),
           base_url: String.t(),
+          temperature: float(),
+          max_tokens: integer(),
           system_prompt: String.t() | nil,
           tools: [ExAgent.Tool.t()],
           req: Req.Request.t() | nil
@@ -27,6 +29,8 @@ defmodule ExAgent.Providers.Gemini do
     :req,
     model: "gemini-2.0-flash",
     base_url: "https://generativelanguage.googleapis.com/v1beta",
+    temperature: 0.6,
+    max_tokens: 512,
     tools: []
   ]
 
@@ -38,6 +42,8 @@ defmodule ExAgent.Providers.Gemini do
       default: "https://generativelanguage.googleapis.com/v1beta",
       doc: "API base URL"
     ],
+    temperature: [type: :float, default: 0.6],
+    max_tokens: [type: :pos_integer, default: 512],
     system_prompt: [type: {:or, [:string, nil]}, default: nil, doc: "System prompt"],
     tools: [type: {:list, :any}, default: [], doc: "Available tools"]
   ]

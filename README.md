@@ -534,12 +534,14 @@ handoff_to_sales = Handoff.build_handoff_tool(
 case ExAgent.chat(triage_agent, "My app keeps crashing") do
   {:ok, response} ->
     # Normal response — agent handled it directly
+    IO.puts("Normal response — agent handled it directly")
     IO.puts(response.content)
 
   {:handoff, target_pid, context} ->
     # Transfer context and continue with the new agent
     ExAgent.handoff(target_pid, context)
     {:ok, response} = ExAgent.chat(target_pid, "My app keeps crashing")
+    IO.puts("Transfer context and continue with the new agent")
     IO.puts(response.content)
 end
 ```

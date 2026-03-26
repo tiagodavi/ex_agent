@@ -31,14 +31,28 @@ defmodule ExAgent.Services.GeminiService do
         ) ::
           {:ok, Message.t()} | {:tool_call, String.t(), map()} | {:error, term()}
   def chat(%Gemini{} = provider, messages, opts \\ []) do
+    max_tokens = opts[:max_tokens] || provider.max_tokens
+    temperature = opts[:temperature] || provider.temperature
+
     opts =
       opts
       |> Keyword.take(Keyword.keys(@chat_opts_schema))
       |> NimbleOptions.validate!(@chat_opts_schema)
 
+    opts =
+      Keyword.merge(opts,
+        temperature: temperature,
+        max_tokens: max_tokens
+      )
+
     body = build_chat_body(messages, provider.tools, provider.system_prompt, opts)
 
-    case Req.post(provider.req, url: "/models/#{provider.model}:generateContent", json: body) do
+    case Req.post(provider.req,
+           url: "/models/#{provider.model}:generateContent",
+           json: body,
+           connect_options: [timeout: :timer.minutes(5)],
+           receive_timeout: :timer.minutes(5)
+         ) do
       {:ok, %Req.Response{status: 200, body: body}} ->
         parse_response(body)
 
