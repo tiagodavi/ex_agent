@@ -311,14 +311,14 @@ Available Gemini built-in tools: `:google_search`, `:code_execution`, `:url_cont
 ```elixir
 # Web search — LLM can search the web
 {:ok, agent} = ExAgent.start_agent(
-  provider: ExAgent.Providers.OpenAI.new(api_key: openai_key),
+  provider: provider,
   built_in_tools: [:web_search]
 )
 {:ok, response} = ExAgent.chat(agent, "What are the latest Elixir releases?")
 
 # Web search with user location for localized results
 {:ok, response} = ExAgent.chat(agent, "Best restaurants nearby",
-  built_in_tools: [%{web_search: %{"city" => "San Francisco", "country" => "US"}}])
+  built_in_tools: [%{web_search: %{"city" => "San Francisco", "country" => "US", "region" => "California"}}])
 ```
 
 Available OpenAI built-in tools: `:web_search`

@@ -166,7 +166,8 @@ defmodule ExAgent.Services.OpenAIService do
         Map.put(acc, "web_search_options", %{})
 
       %{web_search: location_opts}, acc ->
-        Map.put(acc, "web_search_options", %{"user_location" => location_opts})
+        user_location = %{"type" => "approximate", "approximate" => location_opts}
+        Map.put(acc, "web_search_options", %{"user_location" => user_location})
 
       _other, acc ->
         acc

@@ -429,7 +429,10 @@ defmodule ExAgent.Services.OpenAIServiceTest do
         build_provider(fn conn ->
           {:ok, body, conn} = Plug.Conn.read_body(conn)
           parsed = Jason.decode!(body)
-          assert parsed["web_search_options"]["user_location"] == %{"city" => "Tokyo"}
+          assert parsed["web_search_options"]["user_location"] == %{
+                   "type" => "approximate",
+                   "approximate" => %{"city" => "Tokyo"}
+                 }
           Req.Test.json(conn, success_response("Local results"))
         end)
 
