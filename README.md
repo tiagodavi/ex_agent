@@ -2,6 +2,8 @@
 
 An Elixir library for building multi-agent LLM applications. ExAgent abstracts calls to various LLM providers (OpenAI, Gemini, DeepSeek) via an extensible Protocol and orchestrates them using OTP primitives with four multi-agent design patterns.
 
+[Hex Docs](https://hexdocs.pm/ex_agent)
+
 ## Features
 
 - **Protocol-based LLM abstraction** — Swap providers without changing application code
@@ -735,4 +737,4 @@ lib/
 
 ## License
 
-MIT
+Apache-2.0
