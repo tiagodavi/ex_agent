@@ -7,6 +7,7 @@ defmodule ExAgent.Services.OpenAIService do
   """
 
   alias ExAgent.Providers.OpenAI
+  alias ExAgent.Services.Streaming
   alias ExAgent.{FileRef, Message}
 
   @chat_opts_schema [
@@ -26,20 +27,7 @@ defmodule ExAgent.Services.OpenAIService do
         ) ::
           {:ok, Message.t()} | {:tool_call, String.t(), map()} | {:error, term()}
   def chat(%OpenAI{} = provider, messages, opts \\ []) do
-    max_tokens = opts[:max_tokens] || provider.max_tokens
-    temperature = opts[:temperature] || provider.temperature
-
-    opts =
-      opts
-      |> Keyword.take(Keyword.keys(@chat_opts_schema))
-      |> NimbleOptions.validate!(@chat_opts_schema)
-
-    opts =
-      Keyword.merge(opts,
-        temperature: temperature,
-        max_tokens: max_tokens
-      )
-
+    opts = prepare_opts(provider, opts)
     body = build_chat_body(provider.model, messages, provider.tools, provider.system_prompt, opts)
 
     case Req.post(provider.req,
@@ -58,6 +46,43 @@ defmodule ExAgent.Services.OpenAIService do
         {:error, reason}
     end
   end
+
+  @doc """
+  Streams a chat completion from the OpenAI API as a lazy enumerable of text chunks.
+  """
+  @spec stream(OpenAI.t(), [Message.t()], keyword()) :: Enumerable.t()
+  def stream(%OpenAI{} = provider, messages, opts \\ []) do
+    opts = prepare_opts(provider, opts)
+
+    body =
+      provider.model
+      |> build_chat_body(messages, provider.tools, provider.system_prompt, opts)
+      |> Map.put("stream", true)
+
+    Streaming.stream(
+      provider.req,
+      [url: "/chat/completions", json: body, receive_timeout: :timer.minutes(5)],
+      &openai_delta/1
+    )
+  end
+
+  @spec prepare_opts(OpenAI.t(), keyword()) :: keyword()
+  defp prepare_opts(provider, opts) do
+    max_tokens = opts[:max_tokens] || provider.max_tokens
+    temperature = opts[:temperature] || provider.temperature
+
+    opts
+    |> Keyword.take(Keyword.keys(@chat_opts_schema))
+    |> NimbleOptions.validate!(@chat_opts_schema)
+    |> Keyword.merge(temperature: temperature, max_tokens: max_tokens)
+  end
+
+  @spec openai_delta(map()) :: String.t() | nil
+  defp openai_delta(%{"choices" => [%{"delta" => %{"content" => content}} | _]})
+       when is_binary(content),
+       do: content
+
+  defp openai_delta(_frame), do: nil
 
   @spec build_chat_body(
           String.t(),

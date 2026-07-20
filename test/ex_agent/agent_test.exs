@@ -283,6 +283,213 @@ defmodule ExAgent.AgentTest do
     end
   end
 
+  # A one-shot gate: the plug blocks in wait/1 until release/1 is called.
+  # Handles either ordering (wait-then-release or release-then-wait).
+  defmodule Gate do
+    def start_link, do: {:ok, spawn_link(fn -> loop(nil, false) end)}
+
+    def wait(gate) do
+      send(gate, {:wait, self()})
+
+      receive do
+        :go -> :ok
+      after
+        5_000 -> :ok
+      end
+    end
+
+    def release(gate), do: send(gate, :release)
+
+    defp loop(waiter, released) do
+      receive do
+        {:wait, pid} ->
+          if released do
+            send(pid, :go)
+            loop(nil, false)
+          else
+            loop(pid, released)
+          end
+
+        :release ->
+          if waiter do
+            send(waiter, :go)
+            loop(nil, false)
+          else
+            loop(waiter, true)
+          end
+      end
+    end
+  end
+
+  defp wait_for_processing(pid) do
+    if :sys.get_state(pid).status == :processing do
+      :ok
+    else
+      Process.sleep(2)
+      wait_for_processing(pid)
+    end
+  end
+
+  describe "non-blocking dispatch" do
+    defp gated_provider(gate) do
+      build_provider(fn conn ->
+        Gate.wait(gate)
+        Req.Test.json(conn, success_response("done"))
+      end)
+    end
+
+    test "stays responsive to get_context while a chat is in flight" do
+      {:ok, gate} = Gate.start_link()
+      {:ok, pid} = Agent.start_link(provider: gated_provider(gate))
+
+      caller = Task.async(fn -> Agent.chat(pid, "Hi") end)
+      wait_for_processing(pid)
+
+      # Chat is blocked in the provider; the GenServer must still answer reads.
+      context = Agent.get_context(pid)
+      assert length(context.messages) == 1
+      assert hd(context.messages).role == :user
+
+      Gate.release(gate)
+      assert {:ok, %Message{content: "done"}} = Task.await(caller)
+    end
+
+    test "returns :busy when a second chat starts while one is processing" do
+      {:ok, gate} = Gate.start_link()
+      {:ok, pid} = Agent.start_link(provider: gated_provider(gate))
+
+      caller = Task.async(fn -> Agent.chat(pid, "First") end)
+      wait_for_processing(pid)
+
+      assert {:error, :busy} = Agent.chat(pid, "Second")
+
+      Gate.release(gate)
+      assert {:ok, _} = Task.await(caller)
+    end
+
+    test "recovers to idle after a chat completes and accepts the next one" do
+      {:ok, gate} = Gate.start_link()
+      {:ok, pid} = Agent.start_link(provider: gated_provider(gate))
+
+      c1 = Task.async(fn -> Agent.chat(pid, "First") end)
+      Gate.release(gate)
+      assert {:ok, _} = Task.await(c1)
+
+      c2 = Task.async(fn -> Agent.chat(pid, "Second") end)
+      Gate.release(gate)
+      assert {:ok, _} = Task.await(c2)
+    end
+  end
+
+  describe "chat_stream/3" do
+    defp sse(frames) do
+      body = Enum.map_join(frames, "", fn f -> "data: #{Jason.encode!(f)}\n\n" end)
+      body <> "data: [DONE]\n\n"
+    end
+
+    defp delta(content), do: %{"choices" => [%{"delta" => %{"content" => content}}]}
+
+    defp sse_plug(body) do
+      fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("text/event-stream")
+        |> Plug.Conn.send_resp(200, body)
+      end
+    end
+
+    test "streams text chunks when no tools are configured" do
+      provider = build_provider(sse_plug(sse([delta("Hel"), delta("lo"), delta("!")])))
+      {:ok, pid} = Agent.start_link(provider: provider)
+
+      assert ["Hel", "lo", "!"] = pid |> Agent.chat_stream("Hi") |> Enum.to_list()
+    end
+
+    test "commits the streamed response to context once consumed" do
+      provider = build_provider(sse_plug(sse([delta("Hi "), delta("there")])))
+      {:ok, pid} = Agent.start_link(provider: provider)
+
+      pid |> Agent.chat_stream("Hello") |> Stream.run()
+
+      context = Agent.get_context(pid)
+      # user message + streamed assistant message
+      assert length(context.messages) == 2
+      assert %Message{role: :assistant, content: "Hi there"} = List.last(context.messages)
+    end
+
+    test "returns to idle after streaming, accepting the next request" do
+      provider = build_provider(sse_plug(sse([delta("ok")])))
+      {:ok, pid} = Agent.start_link(provider: provider)
+
+      pid |> Agent.chat_stream("first") |> Stream.run()
+      assert :sys.get_state(pid).status == :idle
+      assert ["ok"] = pid |> Agent.chat_stream("second") |> Enum.to_list()
+    end
+
+    test "resolves tool calls first, then streams the final turn" do
+      call_count = :counters.new(1, [:atomics])
+
+      provider =
+        build_provider(fn conn ->
+          :counters.add(call_count, 1, 1)
+          count = :counters.get(call_count, 1)
+
+          cond do
+            # First (non-streamed) call: model asks for a tool.
+            count == 1 ->
+              Req.Test.json(conn, tool_call_response("search", %{"query" => "elixir"}))
+
+            # Second (non-streamed) call detects the final turn (text).
+            count == 2 ->
+              Req.Test.json(conn, success_response("final"))
+
+            # Third call is the streamed final turn.
+            true ->
+              conn
+              |> Plug.Conn.put_resp_content_type("text/event-stream")
+              |> Plug.Conn.send_resp(200, sse([delta("Found "), delta("elixir")]))
+          end
+        end)
+
+      {:ok, tool} =
+        Tool.new(
+          name: "search",
+          description: "Search",
+          parameters: %{},
+          function: fn %{"query" => q} -> {:ok, "Results for #{q}"} end
+        )
+
+      {:ok, pid} = Agent.start_link(provider: provider, tools: [tool])
+
+      assert ["Found ", "elixir"] = pid |> Agent.chat_stream("Search elixir") |> Enum.to_list()
+
+      # user, assistant-tool-call, tool-result, streamed assistant
+      context = Agent.get_context(pid)
+      assert length(context.messages) == 4
+      assert %Message{role: :assistant, content: "Found elixir"} = List.last(context.messages)
+    end
+
+    test "raises when the agent is busy" do
+      {:ok, gate} = Gate.start_link()
+
+      provider =
+        build_provider(fn conn ->
+          Gate.wait(gate)
+          Req.Test.json(conn, success_response("done"))
+        end)
+
+      {:ok, pid} = Agent.start_link(provider: provider)
+      caller = Task.async(fn -> Agent.chat(pid, "First") end)
+      wait_for_processing(pid)
+
+      assert_raise ExAgent.StreamError, fn ->
+        pid |> Agent.chat_stream("Second") |> Enum.to_list()
+      end
+
+      Gate.release(gate)
+      assert {:ok, _} = Task.await(caller)
+    end
+  end
+
   describe "receive_handoff" do
     test "updates agent context via handoff" do
       provider = build_provider(fn conn -> Req.Test.json(conn, success_response("Ok")) end)

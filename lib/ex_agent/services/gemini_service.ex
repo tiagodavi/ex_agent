@@ -8,6 +8,7 @@ defmodule ExAgent.Services.GeminiService do
 
   alias ExAgent.{FileRef, Message}
   alias ExAgent.Providers.Gemini
+  alias ExAgent.Services.Streaming
 
   @chat_opts_schema [
     temperature: [type: :float, default: 0.7],
@@ -31,20 +32,7 @@ defmodule ExAgent.Services.GeminiService do
         ) ::
           {:ok, Message.t()} | {:tool_call, String.t(), map()} | {:error, term()}
   def chat(%Gemini{} = provider, messages, opts \\ []) do
-    max_tokens = opts[:max_tokens] || provider.max_tokens
-    temperature = opts[:temperature] || provider.temperature
-
-    opts =
-      opts
-      |> Keyword.take(Keyword.keys(@chat_opts_schema))
-      |> NimbleOptions.validate!(@chat_opts_schema)
-
-    opts =
-      Keyword.merge(opts,
-        temperature: temperature,
-        max_tokens: max_tokens
-      )
-
+    opts = prepare_opts(provider, opts)
     body = build_chat_body(messages, provider.tools, provider.system_prompt, opts)
 
     case Req.post(provider.req,
@@ -63,6 +51,47 @@ defmodule ExAgent.Services.GeminiService do
         {:error, reason}
     end
   end
+
+  @doc """
+  Streams a chat completion from the Gemini API as a lazy enumerable of text chunks.
+  """
+  @spec stream(Gemini.t(), [Message.t()], keyword()) :: Enumerable.t()
+  def stream(%Gemini{} = provider, messages, opts \\ []) do
+    opts = prepare_opts(provider, opts)
+    body = build_chat_body(messages, provider.tools, provider.system_prompt, opts)
+
+    Streaming.stream(
+      provider.req,
+      [
+        url: "/models/#{provider.model}:streamGenerateContent?alt=sse",
+        json: body,
+        receive_timeout: :timer.minutes(5)
+      ],
+      &gemini_delta/1
+    )
+  end
+
+  @spec prepare_opts(Gemini.t(), keyword()) :: keyword()
+  defp prepare_opts(provider, opts) do
+    max_tokens = opts[:max_tokens] || provider.max_tokens
+    temperature = opts[:temperature] || provider.temperature
+
+    opts
+    |> Keyword.take(Keyword.keys(@chat_opts_schema))
+    |> NimbleOptions.validate!(@chat_opts_schema)
+    |> Keyword.merge(temperature: temperature, max_tokens: max_tokens)
+  end
+
+  @spec gemini_delta(map()) :: String.t() | nil
+  defp gemini_delta(%{"candidates" => [%{"content" => %{"parts" => parts}} | _]})
+       when is_list(parts) do
+    parts
+    |> Enum.map(&Map.get(&1, "text"))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("")
+  end
+
+  defp gemini_delta(_frame), do: nil
 
   @spec build_chat_body([Message.t()], [ExAgent.Tool.t()], String.t() | nil, keyword()) :: map()
   defp build_chat_body(messages, tools, system_prompt, opts) do

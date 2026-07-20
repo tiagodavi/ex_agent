@@ -75,4 +75,9 @@ defmodule ExAgent.Providers.DeepSeek do
   def chat(provider, messages, opts \\ []) do
     ExAgent.Services.DeepSeekService.chat(provider, messages, opts)
   end
+
+  @impl true
+  def stream(provider, messages, opts \\ []) do
+    ExAgent.Services.DeepSeekService.stream(provider, messages, opts)
+  end
 end

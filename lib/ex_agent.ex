@@ -93,6 +93,22 @@ defmodule ExAgent do
   @spec chat_async(GenServer.server(), String.t(), keyword()) :: Task.t()
   defdelegate chat_async(agent, input, opts \\ []), to: Agent
 
+  @doc """
+  Streams an agent's response as a lazy `Stream` of text chunks.
+
+  Only the final assistant turn is streamed; tool-call turns (if any) are
+  resolved first. The conversation context is committed when the stream is fully
+  consumed, so the returned stream must be consumed.
+
+  ## Examples
+
+      agent
+      |> ExAgent.chat_stream("Explain OTP supervision step by step")
+      |> Enum.each(&IO.write/1)
+  """
+  @spec chat_stream(GenServer.server(), String.t(), keyword()) :: Enumerable.t()
+  defdelegate chat_stream(agent, input, opts \\ []), to: Agent
+
   # --- Context ---
 
   @doc """

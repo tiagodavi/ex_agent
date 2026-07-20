@@ -85,4 +85,9 @@ defmodule ExAgent.Providers.Gemini do
   def upload(provider, file_data, mime_type, opts \\ []) do
     ExAgent.Services.GeminiUploadService.upload(provider.api_key, file_data, mime_type, opts)
   end
+
+  @impl true
+  def stream(provider, messages, opts \\ []) do
+    ExAgent.Services.GeminiService.stream(provider, messages, opts)
+  end
 end

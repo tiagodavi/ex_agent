@@ -8,6 +8,7 @@ defmodule ExAgent.Services.DeepSeekService do
 
   alias ExAgent.Message
   alias ExAgent.Providers.DeepSeek
+  alias ExAgent.Services.Streaming
 
   @chat_opts_schema [
     temperature: [type: :float, default: 0.7],
@@ -26,20 +27,7 @@ defmodule ExAgent.Services.DeepSeekService do
         ) ::
           {:ok, Message.t()} | {:tool_call, String.t(), map()} | {:error, term()}
   def chat(%DeepSeek{} = provider, messages, opts \\ []) do
-    max_tokens = opts[:max_tokens] || provider.max_tokens
-    temperature = opts[:temperature] || provider.temperature
-
-    opts =
-      opts
-      |> Keyword.take(Keyword.keys(@chat_opts_schema))
-      |> NimbleOptions.validate!(@chat_opts_schema)
-
-    opts =
-      Keyword.merge(opts,
-        temperature: temperature,
-        max_tokens: max_tokens
-      )
-
+    opts = prepare_opts(provider, opts)
     body = build_chat_body(provider.model, messages, provider.tools, provider.system_prompt, opts)
 
     case Req.post(provider.req,
@@ -58,6 +46,43 @@ defmodule ExAgent.Services.DeepSeekService do
         {:error, reason}
     end
   end
+
+  @doc """
+  Streams a chat completion from the DeepSeek API as a lazy enumerable of text chunks.
+  """
+  @spec stream(DeepSeek.t(), [Message.t()], keyword()) :: Enumerable.t()
+  def stream(%DeepSeek{} = provider, messages, opts \\ []) do
+    opts = prepare_opts(provider, opts)
+
+    body =
+      provider.model
+      |> build_chat_body(messages, provider.tools, provider.system_prompt, opts)
+      |> Map.put("stream", true)
+
+    Streaming.stream(
+      provider.req,
+      [url: "/chat/completions", json: body, receive_timeout: :timer.minutes(5)],
+      &deepseek_delta/1
+    )
+  end
+
+  @spec prepare_opts(DeepSeek.t(), keyword()) :: keyword()
+  defp prepare_opts(provider, opts) do
+    max_tokens = opts[:max_tokens] || provider.max_tokens
+    temperature = opts[:temperature] || provider.temperature
+
+    opts
+    |> Keyword.take(Keyword.keys(@chat_opts_schema))
+    |> NimbleOptions.validate!(@chat_opts_schema)
+    |> Keyword.merge(temperature: temperature, max_tokens: max_tokens)
+  end
+
+  @spec deepseek_delta(map()) :: String.t() | nil
+  defp deepseek_delta(%{"choices" => [%{"delta" => %{"content" => content}} | _]})
+       when is_binary(content),
+       do: content
+
+  defp deepseek_delta(_frame), do: nil
 
   @spec build_chat_body(
           String.t(),

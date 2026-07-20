@@ -81,4 +81,9 @@ defmodule ExAgent.Providers.OpenAI do
   def upload(provider, file_data, mime_type, opts \\ []) do
     ExAgent.Services.OpenAIUploadService.upload(provider.req, file_data, mime_type, opts)
   end
+
+  @impl true
+  def stream(provider, messages, opts \\ []) do
+    ExAgent.Services.OpenAIService.stream(provider, messages, opts)
+  end
 end

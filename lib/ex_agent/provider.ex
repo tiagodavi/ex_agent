@@ -51,7 +51,14 @@ defmodule ExAgent.Provider do
   @callback upload(provider :: struct(), binary(), String.t(), keyword()) ::
               {:ok, ExAgent.FileRef.t()} | {:error, term()}
 
-  @optional_callbacks upload: 4
+  @doc """
+  Streams the assistant's response as a lazy enumerable of text chunks.
+
+  Optional — providers without streaming support omit this callback.
+  """
+  @callback stream(provider :: struct(), [ExAgent.Message.t()], keyword()) :: Enumerable.t()
+
+  @optional_callbacks upload: 4, stream: 3
 
   @doc """
   Dispatches a chat request to the provider's implementation.
@@ -79,6 +86,23 @@ defmodule ExAgent.Provider do
       mod.upload(provider, file_data, mime_type, opts)
     else
       {:error, {:unsupported, :upload, mod}}
+    end
+  end
+
+  @doc """
+  Dispatches a streaming chat request to the provider's implementation.
+
+  Returns a lazy enumerable of text chunks. Raises `ArgumentError` if the
+  provider does not implement `stream/3`.
+  """
+  @spec stream(struct(), [ExAgent.Message.t()], keyword()) :: Enumerable.t()
+  def stream(provider, messages, opts \\ []) do
+    mod = provider.__struct__
+
+    if function_exported?(mod, :stream, 3) do
+      mod.stream(provider, messages, opts)
+    else
+      raise ArgumentError, "#{inspect(mod)} does not support streaming (stream/3)"
     end
   end
 end

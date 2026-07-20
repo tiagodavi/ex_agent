@@ -8,6 +8,7 @@ An Elixir library for building multi-agent LLM applications. ExAgent abstracts c
 
 - **Behaviour-based LLM abstraction** — Swap providers without changing application code
 - **Built on OTP** — Agents backed by GenServers, supervised processes, async Tasks
+- **Streaming** — Stream responses as a lazy `Stream` of text chunks (great for reasoning models)
 - **Automatic tool execution** — Define tools once, the agent loops LLM calls until complete
 - **4 multi-agent patterns** — Subagents, Skills, Handoffs, Router
 - **HTTP via Req** — Clean, composable HTTP with built-in JSON encoding and auth
@@ -21,7 +22,7 @@ Add `ex_agent` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_agent, "~> 0.2.0"}
+    {:ex_agent, "~> 0.3.0"}
   ]
 end
 ```
@@ -177,6 +178,41 @@ ExAgent.reset(agent)
 # Stop the agent
 ExAgent.stop_agent(agent)
 ```
+
+## Streaming
+
+Stream the assistant's response as a lazy `Stream` of text chunks — ideal for
+reasoning ("thinking") models, where a blocking call would return nothing until
+the full completion is ready.
+
+```elixir
+# Agent-level: streams the final assistant turn
+agent
+|> ExAgent.chat_stream("Explain OTP supervision step by step")
+|> Enum.each(&IO.write/1)
+```
+
+Tool-call turns (if any tools are configured) are resolved first without
+streaming; only the final assistant turn is streamed. When no tools are
+configured, the response is streamed directly. The conversation context is
+committed once the stream is fully consumed, so **the returned stream must be
+consumed**. While a stream is in flight the agent is busy — a concurrent request
+raises `ExAgent.StreamError` (agent-level) or returns `{:error, :busy}` (`chat/3`).
+
+You can also stream directly from a provider, bypassing the agent and its
+context/tool loop:
+
+```elixir
+provider = ExAgent.Providers.DeepSeek.new(api_key: key, model: "deepseek-reasoner")
+{:ok, msg} = ExAgent.Message.new(role: :user, content: "Why is the sky blue?")
+
+provider
+|> ExAgent.Provider.stream([msg])
+|> Enum.each(&IO.write/1)
+```
+
+Streaming is text-only in this version: provider built-in/tool-call deltas are
+not surfaced as chunks.
 
 ## File Attachments
 
