@@ -22,7 +22,7 @@ Add `ex_agent` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_agent, "~> 0.3.0"}
+    {:ex_agent, "~> 0.2.0"}
   ]
 end
 ```

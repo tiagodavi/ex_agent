@@ -1,4 +1,4 @@
-## v0.3.0 (2026-07-20)
+## v0.2.0 (2026-07-20)
 
 ### Added
 
@@ -10,20 +10,15 @@
 
 ### Changed
 
-- **Non-blocking agent.** `ExAgent.Agent` now runs the tool loop off the GenServer
-  (via a supervised task), so an agent stays responsive to reads (`get_context`)
-  and casts while a request is in flight. A concurrent `chat/3` on a busy agent
-  now returns `{:error, :busy}` instead of serializing behind the mailbox.
-
-## v0.2.0 (2026-07-20)
-
-### Changed
-
 - **Providers are now a behaviour instead of protocols.** The `ExAgent.LlmProvider`
   and `ExAgent.FileUploader` protocols were removed and replaced by a single
   `ExAgent.Provider` behaviour (`chat/3` required, `upload/4` optional). Custom
   providers now declare `@behaviour ExAgent.Provider` and implement `chat/3`
   (and optionally `upload/4`) as public functions instead of using `defimpl`.
+- **Non-blocking agent.** `ExAgent.Agent` now runs the tool loop off the GenServer
+  (via a supervised task), so an agent stays responsive to reads (`get_context`)
+  and casts while a request is in flight. A concurrent `chat/3` on a busy agent
+  now returns `{:error, :busy}` instead of serializing behind the mailbox.
 
 ## v0.1.0 (2026-03-30)
 
