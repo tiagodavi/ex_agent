@@ -68,8 +68,8 @@ defmodule ExAgent.Providers.OpenAITest do
     end
   end
 
-  # FileUploader protocol tests
-  describe "FileUploader.upload/4" do
+  # Provider upload behaviour tests
+  describe "Provider.upload/4" do
     test "uploads a file and returns a FileRef" do
       provider = %OpenAI{
         api_key: "sk-test",
@@ -93,7 +93,7 @@ defmodule ExAgent.Providers.OpenAITest do
       }
 
       assert {:ok, %ExAgent.FileRef{provider: :openai, file_id: "file-upload123"}} =
-               ExAgent.FileUploader.upload(provider, "pdf data", "application/pdf",
+               ExAgent.Provider.upload(provider, "pdf data", "application/pdf",
                  filename: "test.pdf"
                )
     end
@@ -115,7 +115,7 @@ defmodule ExAgent.Providers.OpenAITest do
       }
 
       assert {:error, {401, _}} =
-               ExAgent.FileUploader.upload(provider, "data", "text/plain")
+               ExAgent.Provider.upload(provider, "data", "text/plain")
     end
   end
 end

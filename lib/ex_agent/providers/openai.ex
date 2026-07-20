@@ -8,8 +8,10 @@ defmodule ExAgent.Providers.OpenAI do
   ## Example
 
       provider = ExAgent.Providers.OpenAI.new(api_key: "sk-...")
-      ExAgent.LlmProvider.chat(provider, messages)
+      ExAgent.Provider.chat(provider, messages)
   """
+
+  @behaviour ExAgent.Provider
 
   @type t :: %__MODULE__{
           api_key: String.t(),
@@ -70,19 +72,13 @@ defmodule ExAgent.Providers.OpenAI do
     )
   end
 
-  defimpl ExAgent.LlmProvider do
-    def chat(provider, messages, opts \\ []) do
-      ExAgent.Services.OpenAIService.chat(
-        provider,
-        messages,
-        opts
-      )
-    end
+  @impl true
+  def chat(provider, messages, opts \\ []) do
+    ExAgent.Services.OpenAIService.chat(provider, messages, opts)
   end
 
-  defimpl ExAgent.FileUploader do
-    def upload(provider, file_data, mime_type, opts \\ []) do
-      ExAgent.Services.OpenAIUploadService.upload(provider.req, file_data, mime_type, opts)
-    end
+  @impl true
+  def upload(provider, file_data, mime_type, opts \\ []) do
+    ExAgent.Services.OpenAIUploadService.upload(provider.req, file_data, mime_type, opts)
   end
 end

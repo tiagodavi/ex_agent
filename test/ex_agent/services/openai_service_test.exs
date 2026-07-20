@@ -370,7 +370,12 @@ defmodule ExAgent.Services.OpenAIServiceTest do
           [file_part, text_part] = msg["content"]
           assert file_part["type"] == "file"
           assert file_part["file"]["filename"] == "upload"
-          assert String.starts_with?(file_part["file"]["file_data"], "data:application/pdf;base64,")
+
+          assert String.starts_with?(
+                   file_part["file"]["file_data"],
+                   "data:application/pdf;base64,"
+                 )
+
           refute Map.has_key?(file_part["file"], "file_id")
           assert text_part["type"] == "text"
           Req.Test.json(conn, success_response("A PDF"))
@@ -401,7 +406,9 @@ defmodule ExAgent.Services.OpenAIServiceTest do
         Message.new(
           role: :user,
           content: "Read this",
-          attachments: [%{data: "pdf_bytes", mime_type: "application/pdf", filename: "report.pdf"}]
+          attachments: [
+            %{data: "pdf_bytes", mime_type: "application/pdf", filename: "report.pdf"}
+          ]
         )
 
       assert {:ok, _} = OpenAIService.chat(provider, [msg])
@@ -429,10 +436,12 @@ defmodule ExAgent.Services.OpenAIServiceTest do
         build_provider(fn conn ->
           {:ok, body, conn} = Plug.Conn.read_body(conn)
           parsed = Jason.decode!(body)
+
           assert parsed["web_search_options"]["user_location"] == %{
                    "type" => "approximate",
                    "approximate" => %{"city" => "Tokyo"}
                  }
+
           Req.Test.json(conn, success_response("Local results"))
         end)
 

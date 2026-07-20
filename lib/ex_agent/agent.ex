@@ -3,13 +3,13 @@ defmodule ExAgent.Agent do
   GenServer that manages a single LLM agent.
 
   Holds the provider struct in state and dispatches calls via the
-  `ExAgent.LlmProvider` protocol. Contains the tool execution loop
+  `ExAgent.Provider` behaviour. Contains the tool execution loop
   that automatically invokes tools when the LLM requests them.
 
   ## State
 
   The agent state includes:
-  - `provider` - any struct implementing `ExAgent.LlmProvider`
+  - `provider` - any struct implementing `ExAgent.Provider`
   - `context` - conversation history (`ExAgent.Context`)
   - `tools` - available tools for function-calling
   - `skills` - loadable skill definitions
@@ -18,7 +18,7 @@ defmodule ExAgent.Agent do
 
   use GenServer
 
-  alias ExAgent.{Context, LlmProvider, Message, Skill, Tool}
+  alias ExAgent.{Context, Message, Provider, Skill, Tool}
   alias ExAgent.Patterns.Skills, as: SkillsPattern
 
   @type agent_opts :: [
@@ -199,7 +199,7 @@ defmodule ExAgent.Agent do
     messages = state.context.messages
     provider = %{state.provider | tools: effective_tools}
 
-    case LlmProvider.chat(provider, messages, opts) do
+    case Provider.chat(provider, messages, opts) do
       {:ok, %Message{} = response_msg} ->
         new_context = Context.add_message(state.context, response_msg)
         {:ok, response_msg, %{state | context: new_context}}

@@ -7,8 +7,10 @@ defmodule ExAgent.Providers.DeepSeek do
   ## Example
 
       provider = ExAgent.Providers.DeepSeek.new(api_key: "sk-...")
-      ExAgent.LlmProvider.chat(provider, messages)
+      ExAgent.Provider.chat(provider, messages)
   """
+
+  @behaviour ExAgent.Provider
 
   @type t :: %__MODULE__{
           api_key: String.t(),
@@ -69,9 +71,8 @@ defmodule ExAgent.Providers.DeepSeek do
     )
   end
 
-  defimpl ExAgent.LlmProvider do
-    def chat(provider, messages, opts \\ []) do
-      ExAgent.Services.DeepSeekService.chat(provider, messages, opts)
-    end
+  @impl true
+  def chat(provider, messages, opts \\ []) do
+    ExAgent.Services.DeepSeekService.chat(provider, messages, opts)
   end
 end

@@ -1,18 +1,18 @@
 # ExAgent
 
-An Elixir library for building multi-agent LLM applications. ExAgent abstracts calls to various LLM providers (OpenAI, Gemini, DeepSeek) via an extensible Protocol and orchestrates them using OTP primitives with four multi-agent design patterns.
+An Elixir library for building multi-agent LLM applications. ExAgent abstracts calls to various LLM providers (OpenAI, Gemini, DeepSeek) via an extensible behaviour and orchestrates them using OTP primitives with four multi-agent design patterns.
 
 [Hex Docs](https://hexdocs.pm/ex_agent)
 
 ## Features
 
-- **Protocol-based LLM abstraction** — Swap providers without changing application code
+- **Behaviour-based LLM abstraction** — Swap providers without changing application code
 - **Built on OTP** — Agents backed by GenServers, supervised processes, async Tasks
 - **Automatic tool execution** — Define tools once, the agent loops LLM calls until complete
 - **4 multi-agent patterns** — Subagents, Skills, Handoffs, Router
 - **HTTP via Req** — Clean, composable HTTP with built-in JSON encoding and auth
 - **Multimodal file attachments** — Send images, PDFs, and other files alongside chat messages
-- **Extensible** — Add any LLM provider by implementing a single protocol
+- **Extensible** — Add any LLM provider by implementing a single behaviour
 
 ## Installation
 
@@ -21,7 +21,7 @@ Add `ex_agent` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:ex_agent, "~> 0.1.0"}
+    {:ex_agent, "~> 0.2.0"}
   ]
 end
 ```
@@ -614,11 +614,13 @@ IO.puts(result)
 
 ## Adding a Custom Provider
 
-Any LLM can be integrated by defining a struct and implementing the `ExAgent.LlmProvider` protocol:
+Any LLM can be integrated by defining a struct and implementing the `ExAgent.Provider` behaviour. Only `chat/3` is required; `upload/4` is optional (`@optional_callbacks`) for providers that support file uploads:
 
 ```elixir
 defmodule MyApp.Providers.Anthropic do
   @moduledoc "Custom Anthropic Claude provider."
+
+  @behaviour ExAgent.Provider
 
   defstruct [
     :api_key, :req,
@@ -639,26 +641,25 @@ defmodule MyApp.Providers.Anthropic do
     )}
   end
 
-  defimpl ExAgent.LlmProvider do
-    def chat(provider, messages, _opts) do
-      body = %{
-        "model" => provider.model,
-        "max_tokens" => 1024,
-        "messages" => Enum.map(messages, fn msg ->
-          %{"role" => to_string(msg.role), "content" => msg.content}
-        end)
-      }
+  @impl true
+  def chat(provider, messages, _opts) do
+    body = %{
+      "model" => provider.model,
+      "max_tokens" => 1024,
+      "messages" => Enum.map(messages, fn msg ->
+        %{"role" => to_string(msg.role), "content" => msg.content}
+      end)
+    }
 
-      case Req.post(provider.req, url: "/messages", json: body) do
-        {:ok, %Req.Response{status: 200, body: %{"content" => [%{"text" => text} | _]}}} ->
-          {:ok, %ExAgent.Message{role: :assistant, content: text}}
+    case Req.post(provider.req, url: "/messages", json: body) do
+      {:ok, %Req.Response{status: 200, body: %{"content" => [%{"text" => text} | _]}}} ->
+        {:ok, %ExAgent.Message{role: :assistant, content: text}}
 
-        {:ok, %Req.Response{status: status, body: body}} ->
-          {:error, {status, body}}
+      {:ok, %Req.Response{status: status, body: body}} ->
+        {:error, {status, body}}
 
-        {:error, reason} ->
-          {:error, reason}
-      end
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 end
@@ -694,10 +695,10 @@ Application (ex_agent)
 
 ### Design Decisions
 
-- **Protocol dispatch** — Provider structs implement `ExAgent.LlmProvider`, enabling compile-time polymorphism
-- **Thin protocol impls** — Protocol implementations delegate to service modules under `services/`, keeping HTTP logic separate
+- **Behaviour dispatch** — Provider structs implement the `ExAgent.Provider` behaviour; `ExAgent.Provider` doubles as a dispatcher that resolves the callback module from the struct
+- **Thin provider modules** — Provider `chat/4`/`upload/4` callbacks delegate to service modules under `services/`, keeping HTTP logic separate
 - **Tool loop in GenServer** — The `handle_call({:chat, ...})` contains the tool execution loop, processing one turn at a time to prevent race conditions on context
-- **Subagents bypass GenServer** — Ephemeral stateless calls use `LlmProvider.chat/3` directly in supervised Tasks
+- **Subagents bypass GenServer** — Ephemeral stateless calls use `Provider.chat/3` directly in supervised Tasks
 - **Handoff returns to caller** — Keeps agents decoupled; the caller decides routing after a handoff
 - **Router is a plain module** — Stateless classify-dispatch-synthesize flow needs no GenServer
 - **All patterns share one Agent GenServer** — Patterns augment behavior through state and tools, not separate process types
@@ -708,8 +709,7 @@ Application (ex_agent)
 lib/
   ex_agent.ex                     # Public API facade
   ex_agent/
-    llm_provider.ex               # LlmProvider protocol
-    file_uploader.ex              # FileUploader protocol
+    provider.ex                   # Provider behaviour + dispatcher
     file_ref.ex                   # %FileRef{} struct (uploaded file reference)
     message.ex                    # %Message{} struct
     tool.ex                       # %Tool{} struct
@@ -719,9 +719,9 @@ lib/
     supervisor.ex                 # AgentSupervisor
     dynamic_supervisor.ex         # AgentDynamicSupervisor
     providers/
-      openai.ex                   # OpenAI provider + LlmProvider + FileUploader
-      gemini.ex                   # Gemini provider + LlmProvider + FileUploader
-      deep_seek.ex                # DeepSeek provider + LlmProvider
+      openai.ex                   # OpenAI provider (chat + upload)
+      gemini.ex                   # Gemini provider (chat + upload)
+      deep_seek.ex                # DeepSeek provider (chat)
     services/
       openai_service.ex           # OpenAI chat HTTP calls via Req
       openai_upload_service.ex    # OpenAI file upload (POST /v1/files)

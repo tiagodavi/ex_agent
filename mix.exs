@@ -1,7 +1,7 @@
 defmodule ExAgent.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @url_docs "https://hexdocs.pm/ex_agent"
   @url_github "https://github.com/tiagodavi/ex_agent"
 

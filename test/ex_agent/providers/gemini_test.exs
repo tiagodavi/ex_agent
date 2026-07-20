@@ -64,8 +64,8 @@ defmodule ExAgent.Providers.GeminiTest do
     end
   end
 
-  # FileUploader protocol tests
-  describe "FileUploader.upload/4" do
+  # Provider upload behaviour tests
+  describe "Provider.upload/4" do
     test "uploads a file and returns a FileRef" do
       req =
         Req.new(
@@ -96,7 +96,7 @@ defmodule ExAgent.Providers.GeminiTest do
                 provider: :gemini,
                 file_uri: "https://generativelanguage.googleapis.com/v1beta/files/gemini123"
               }} =
-               ExAgent.FileUploader.upload(provider, "jpeg data", "image/jpeg",
+               ExAgent.Provider.upload(provider, "jpeg data", "image/jpeg",
                  filename: "photo.jpg",
                  req: req,
                  upload_url: "http://localhost/upload/v1beta/files"
@@ -120,7 +120,7 @@ defmodule ExAgent.Providers.GeminiTest do
       }
 
       assert {:error, {403, _}} =
-               ExAgent.FileUploader.upload(provider, "data", "text/plain",
+               ExAgent.Provider.upload(provider, "data", "text/plain",
                  req: req,
                  upload_url: "http://localhost/upload/v1beta/files"
                )

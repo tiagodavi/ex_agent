@@ -7,7 +7,7 @@ defmodule ExAgent.Patterns.Subagents do
   a single LLM call and return the result without maintaining state.
   """
 
-  alias ExAgent.{LlmProvider, Message, Tool}
+  alias ExAgent.{Provider, Message, Tool}
 
   @type subagent_spec :: %{
           name: String.t(),
@@ -44,7 +44,7 @@ defmodule ExAgent.Patterns.Subagents do
   @doc """
   Invokes a subagent synchronously with a single query.
 
-  Creates a fresh context, calls `LlmProvider.chat/3` directly
+  Creates a fresh context, calls `Provider.chat/3` directly
   (no GenServer), and returns the assistant's response content.
   """
   @spec invoke_subagent(subagent_spec(), String.t()) :: {:ok, String.t()} | {:error, term()}
@@ -53,7 +53,7 @@ defmodule ExAgent.Patterns.Subagents do
     provider = maybe_set_system_prompt(spec.provider, spec[:system_prompt])
     provider = %{provider | tools: spec[:tools] || []}
 
-    case LlmProvider.chat(provider, [user_msg], []) do
+    case Provider.chat(provider, [user_msg], []) do
       {:ok, %Message{content: content}} ->
         {:ok, content}
 

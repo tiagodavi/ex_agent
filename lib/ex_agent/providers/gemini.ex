@@ -8,8 +8,10 @@ defmodule ExAgent.Providers.Gemini do
   ## Example
 
       provider = ExAgent.Providers.Gemini.new(api_key: "AIza...")
-      ExAgent.LlmProvider.chat(provider, messages)
+      ExAgent.Provider.chat(provider, messages)
   """
+
+  @behaviour ExAgent.Provider
 
   @type t :: %__MODULE__{
           api_key: String.t(),
@@ -74,15 +76,13 @@ defmodule ExAgent.Providers.Gemini do
     )
   end
 
-  defimpl ExAgent.LlmProvider do
-    def chat(provider, messages, opts \\ []) do
-      ExAgent.Services.GeminiService.chat(provider, messages, opts)
-    end
+  @impl true
+  def chat(provider, messages, opts \\ []) do
+    ExAgent.Services.GeminiService.chat(provider, messages, opts)
   end
 
-  defimpl ExAgent.FileUploader do
-    def upload(provider, file_data, mime_type, opts \\ []) do
-      ExAgent.Services.GeminiUploadService.upload(provider.api_key, file_data, mime_type, opts)
-    end
+  @impl true
+  def upload(provider, file_data, mime_type, opts \\ []) do
+    ExAgent.Services.GeminiUploadService.upload(provider.api_key, file_data, mime_type, opts)
   end
 end

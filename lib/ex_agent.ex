@@ -3,7 +3,7 @@ defmodule ExAgent do
   Public API for the ExAgent multi-agent LLM library.
 
   ExAgent abstracts calls to various LLMs (OpenAI, Gemini, DeepSeek)
-  via the `ExAgent.LlmProvider` protocol and orchestrates them using
+  via the `ExAgent.Provider` behaviour and orchestrates them using
   OTP primitives and four multi-agent design patterns.
 
   ## Quick Start
@@ -25,7 +25,7 @@ defmodule ExAgent do
   - **Router** - Parallel dispatch and synthesis across agents
   """
 
-  alias ExAgent.{Agent, Context, FileRef, FileUploader}
+  alias ExAgent.{Agent, Context, FileRef, Provider}
   alias ExAgent.Patterns.{Handoff, Router}
 
   # --- Agent Lifecycle ---
@@ -35,7 +35,7 @@ defmodule ExAgent do
 
   ## Options
 
-  - `:provider` (required) - struct implementing `ExAgent.LlmProvider`
+  - `:provider` (required) - struct implementing `ExAgent.Provider`
   - `:id` - unique agent identifier
   - `:tools` - list of `ExAgent.Tool` structs
   - `:skills` - list of `ExAgent.Skill` structs
@@ -131,7 +131,7 @@ defmodule ExAgent do
   def upload_file(provider, file_path, mime_type, opts \\ []) do
     with {:ok, data} <- File.read(file_path) do
       opts = Keyword.put_new(opts, :filename, Path.basename(file_path))
-      FileUploader.upload(provider, data, mime_type, opts)
+      Provider.upload(provider, data, mime_type, opts)
     end
   end
 
@@ -153,7 +153,7 @@ defmodule ExAgent do
   @spec upload_data(struct(), binary(), String.t(), keyword()) ::
           {:ok, FileRef.t()} | {:error, term()}
   def upload_data(provider, data, mime_type, opts \\ []) do
-    FileUploader.upload(provider, data, mime_type, opts)
+    Provider.upload(provider, data, mime_type, opts)
   end
 
   # --- Patterns ---
