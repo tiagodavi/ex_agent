@@ -17,6 +17,8 @@ any OpenAI-compatible endpoint; OTP primitives orchestrate them.
 - **8 agent architectures** - Chain, Router, Subagents, Handoff, Skills, Reflection,
   MapReduce, Consensus, with a guide to picking one
 
+![The 8 ExAgent patterns, each with an analogy and when to reach for it](assets/patterns.png)
+
 ## Install
 
 ```elixir

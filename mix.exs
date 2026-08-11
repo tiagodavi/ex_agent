@@ -11,7 +11,7 @@ defmodule ExAgent.MixProject do
 
   defp package() do
     [
-      files: ~w(lib .formatter.exs mix.exs README* LICENSE* CHANGELOG* NOTICE),
+      files: ~w(lib assets .formatter.exs mix.exs README* LICENSE* CHANGELOG* NOTICE),
       licenses: ["Apache-2.0"],
       maintainers: [
         "Tiago D S Batista"
@@ -30,6 +30,9 @@ defmodule ExAgent.MixProject do
       main: "readme",
       extra_section: "guides",
       extras: ["README.md", "CHANGELOG.md", "NOTICE", "LICENSE"],
+      # Copied verbatim so the README's `assets/` image paths resolve the same
+      # way on HexDocs as they do on GitHub.
+      assets: %{"assets" => "assets"},
       # Grouped to mirror the README's sections, so the sidebar reads the same
       # way as the guide.
       groups_for_modules: [
