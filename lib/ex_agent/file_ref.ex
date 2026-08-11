@@ -2,8 +2,9 @@ defmodule ExAgent.FileRef do
   @moduledoc """
   Reference to a file previously uploaded to an LLM provider.
 
-  Holds the provider-specific file identifier (OpenAI `file_id` or
-  Gemini `file_uri`) so that uploaded files can be referenced in
+  Holds the provider-specific file identifier (OpenAI `file_id`, Gemini
+  `file_uri`, or whichever a custom provider uses) so that uploaded files can be
+  referenced in
   chat messages without re-sending the binary data.
 
   ## Examples
@@ -24,7 +25,7 @@ defmodule ExAgent.FileRef do
   """
 
   @type t :: %__MODULE__{
-          provider: :openai | :gemini,
+          provider: atom(),
           file_id: String.t() | nil,
           file_uri: String.t() | nil,
           mime_type: String.t(),
@@ -35,14 +36,13 @@ defmodule ExAgent.FileRef do
   @enforce_keys [:provider, :mime_type]
   defstruct [:provider, :file_id, :file_uri, :mime_type, :filename, :expires_at]
 
-  @valid_providers ~w(openai gemini)a
-
   @doc """
   Creates a new file reference with validated attributes.
 
   ## Options
 
-  - `:provider` (required) - `:openai` or `:gemini`
+  - `:provider` (required) - `:openai`, `:gemini`, or the atom naming a custom
+    provider that implements `c:ExAgent.Provider.upload/4`
   - `:mime_type` (required) - MIME type of the uploaded file
   - `:file_id` - OpenAI file ID (required for `:openai` provider)
   - `:file_uri` - Gemini file URI (required for `:gemini` provider)
@@ -87,12 +87,13 @@ defmodule ExAgent.FileRef do
   @spec validate_provider(atom() | nil) :: {:ok, atom()} | {:error, String.t()}
   defp validate_provider(nil), do: {:error, "provider is required"}
 
-  defp validate_provider(provider) when provider in @valid_providers, do: {:ok, provider}
+  # Any atom: a custom provider implementing `c:ExAgent.Provider.upload/4` has to
+  # be able to build the reference its own callback returns. The field rules
+  # below still apply to the built-ins.
+  defp validate_provider(provider) when is_atom(provider), do: {:ok, provider}
 
   defp validate_provider(provider),
-    do:
-      {:error,
-       "invalid provider: #{inspect(provider)}. Must be one of: #{inspect(@valid_providers)}"}
+    do: {:error, "provider must be an atom, got: #{inspect(provider)}"}
 
   @spec validate_mime_type(String.t() | nil) :: {:ok, String.t()} | {:error, String.t()}
   defp validate_mime_type(nil), do: {:error, "mime_type is required"}
@@ -111,4 +112,15 @@ defmodule ExAgent.FileRef do
       do: :ok,
       else: {:error, "Gemini file references require :file_uri"}
   end
+
+  # Whichever identifier a custom provider's API uses, a reference has to carry
+  # one — that is the only rule this struct can state without knowing the API.
+  defp validate_provider_fields(_provider, attrs) do
+    if present?(attrs[:file_id]) or present?(attrs[:file_uri]),
+      do: :ok,
+      else: {:error, "file references require :file_id or :file_uri"}
+  end
+
+  @spec present?(term()) :: boolean()
+  defp present?(value), do: is_binary(value) and value != ""
 end

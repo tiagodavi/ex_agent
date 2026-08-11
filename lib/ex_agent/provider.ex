@@ -20,6 +20,20 @@ defmodule ExAgent.Provider do
   - `ExAgent.Providers.Gemini`
   - `ExAgent.Providers.OpenAICompatible`
 
+  ## What the library requires of a provider struct
+
+  Nothing beyond being a struct. The dispatcher resolves the callback module from
+  `provider.__struct__` and never inspects fields. Optional conveniences:
+
+  - a `:tools` field — the agent populates it before each turn so the service can
+    read it back; a provider with no tool support simply omits it
+  - a `:system_prompt` field — read by that provider's own service, not by the
+    library
+
+  Everything vendor-specific — accepted modalities, inline size ceilings, content
+  part shapes, embedding task vocabularies — belongs to the provider and its
+  service, so a new provider is free to disagree with every one that ships here.
+
   ## Extensibility
 
   To add a new provider, define a struct and implement this behaviour.

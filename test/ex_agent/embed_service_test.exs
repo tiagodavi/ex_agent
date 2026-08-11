@@ -451,6 +451,76 @@ defmodule ExAgent.EmbedServiceTest do
     end
   end
 
+  # Compatible endpoints serve arbitrary models with arbitrary task vocabularies
+  # that change between versions — Jina v3 has "retrieval.passage", v5 replaced it
+  # with "retrieval" plus a prompt and added "text-matching". Only there is a raw
+  # string accepted; Gemini's taskType is a closed enum and OpenAI has no task
+  # field, so both stay validated.
+  describe "verbatim string tasks" do
+    test "given a string task on a compatible endpoint, then it is sent unchanged" do
+      provider = openai_style_provider(OpenAICompatible, [[0.1]])
+
+      assert {:ok, _} = ExAgent.embed(provider, ["a"], task: "text-matching")
+
+      assert sent().body["task"] == "text-matching"
+    end
+
+    test "given a string task, then no :task_map is consulted" do
+      provider = openai_style_provider(OpenAICompatible, [[0.1]])
+
+      assert {:ok, _} =
+               ExAgent.embed(provider, ["a"],
+                 task: "separation",
+                 task_map: %{retrieval_query: "ignored"}
+               )
+
+      assert sent().body["task"] == "separation"
+    end
+
+    test "given a string task, then the result carries it back verbatim" do
+      provider = openai_style_provider(OpenAICompatible, [[0.1]])
+
+      assert {:ok, result} = ExAgent.embed(provider, ["a"], task: "text-matching")
+
+      assert result.task == "text-matching"
+    end
+
+    test "given a string task on Gemini, then it is rejected and points to the atoms" do
+      provider = gemini_provider([[0.1, 0.2]])
+
+      assert {:error, %Error{type: :invalid_request} = error} =
+               ExAgent.embed(provider, ["a"], task: "NEW_ENUM_VALUE")
+
+      assert error.message =~ "normalized task atom"
+      assert error.message =~ "retrieval_query"
+    end
+
+    test "given a string task on the Gemini prefix family, then it is rejected too" do
+      provider = gemini_provider([[0.1, 0.2]])
+
+      assert {:error, %Error{type: :invalid_request}} =
+               ExAgent.embed(provider, ["hello"],
+                 model: "gemini-embedding-2",
+                 task: "custom instruction"
+               )
+    end
+
+    test "given an unknown atom task, then it is still rejected" do
+      # Strings opt out of validation; atoms do not, so a typo stays loud.
+      provider = openai_style_provider(OpenAICompatible, [[0.1]])
+
+      assert {:error, %Error{type: :unsupported}} =
+               ExAgent.embed(provider, ["a"], task: :retreival_query)
+    end
+
+    test "given a string task on OpenAI, then it is still unsupported" do
+      provider = openai_style_provider(OpenAI, [[0.1]])
+
+      assert {:error, %Error{type: :unsupported}} =
+               ExAgent.embed(provider, ["a"], task: "text-matching")
+    end
+  end
+
   describe "result provenance" do
     test "given a result, then model, dimensions and task are carried for storage" do
       provider = gemini_provider([[0.1, 0.2, 0.3]])

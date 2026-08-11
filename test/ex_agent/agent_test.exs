@@ -117,6 +117,73 @@ defmodule ExAgent.AgentTest do
     # `ExAgent.Tool`'s :function is typed `(map() -> any())` and its own doctest
     # returns a bare `:ok`, so a tool returning an unwrapped value must be taken
     # as the result rather than crashing the loop with a CaseClauseError.
+    # A failed turn used to stay in history, so a message the provider can never
+    # accept — a rejected attachment — was resent on every later turn and broke
+    # the agent permanently. "Fails loudly" must not mean "fails forever".
+    test "given a rejected attachment on a stream, then it yields an error chunk, not a raise" do
+      # chat_stream/3 documents that it never raises; the modality gate raises
+      # inside Provider.stream/3 because a lazy enumerable cannot carry an error
+      # tuple, so the agent has to convert it.
+      provider = build_provider(fn conn -> Req.Test.json(conn, success_response("fine")) end)
+      {:ok, pid} = Agent.start_link(provider: provider)
+
+      chunks =
+        pid
+        |> Agent.chat_stream("look", files: [%{url: "https://x.test/clip.mp4"}])
+        |> Enum.to_list()
+
+      assert [%ExAgent.Chunk{type: :done, error: %ExAgent.Error{type: :unsupported}}] = chunks
+
+      # ...and the agent is released and unpoisoned.
+      assert :sys.get_state(pid).status == :idle
+      assert Agent.get_context(pid).messages == []
+      assert {:ok, %ExAgent.Response{content: "fine"}} = Agent.chat(pid, "plain text")
+    end
+
+    test "given a rejected attachment, then later plain-text turns still work" do
+      provider = build_provider(fn conn -> Req.Test.json(conn, success_response("fine")) end)
+      {:ok, pid} = Agent.start_link(provider: provider)
+
+      assert {:error, %ExAgent.Error{type: :unsupported}} =
+               Agent.chat(pid, "look", files: [%{url: "https://x.test/clip.mp4"}])
+
+      assert {:ok, %ExAgent.Response{content: "fine"}} = Agent.chat(pid, "plain text")
+      assert {:ok, %ExAgent.Response{content: "fine"}} = Agent.chat(pid, "more plain text")
+    end
+
+    test "given a failed turn, then it leaves no trace in the context" do
+      provider = build_provider(fn conn -> Plug.Conn.send_resp(conn, 429, ~s({"error":{}})) end)
+      {:ok, pid} = Agent.start_link(provider: provider)
+
+      assert {:error, %ExAgent.Error{type: :rate_limit}} = Agent.chat(pid, "hello")
+
+      # Retrying must not duplicate the question in history.
+      assert Agent.get_context(pid).messages == []
+    end
+
+    test "given a successful turn after a failed one, then history holds only the good turn" do
+      count = :counters.new(1, [:atomics])
+
+      provider =
+        build_provider(fn conn ->
+          :counters.add(count, 1, 1)
+
+          if :counters.get(count, 1) == 1 do
+            Plug.Conn.send_resp(conn, 500, ~s({"error":{}}))
+          else
+            Req.Test.json(conn, success_response("recovered"))
+          end
+        end)
+
+      {:ok, pid} = Agent.start_link(provider: provider)
+
+      assert {:error, %ExAgent.Error{}} = Agent.chat(pid, "first")
+      assert {:ok, _} = Agent.chat(pid, "second")
+
+      assert [%{role: :user, content: "second"}, %{role: :assistant}] =
+               Agent.get_context(pid).messages
+    end
+
     test "accepts a tool that returns a bare value instead of an {:ok, _} tuple" do
       call_count = :counters.new(1, [:atomics])
 

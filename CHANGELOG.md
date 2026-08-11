@@ -86,6 +86,15 @@
   which that model does not do for you. An unknown Gemini embedding model errors rather
   than guessing a family — pass `:embedding_family` to adopt a newer one.
 
+  On `OpenAICompatible` only, `:task` also accepts a **raw string**, sent verbatim with
+  no translation and no validation — a self-hosted endpoint serves whatever model you
+  deployed, and those vocabularies change between versions (Jina v3's
+  `"retrieval.passage"` became a `"retrieval"` task plus a prompt in v5, which also added
+  `"text-matching"`). Gemini and OpenAI take atoms only: `taskType` is a closed enum and
+  OpenAI has no task field, so a string there is a typo far more often than a new value
+  and is rejected naming the valid atoms. Atoms stay validated everywhere, and the result
+  carries back exactly what was passed.
+
   `ExAgent.Embeddings` also exposes `tasks/0`, `valid_task?/1`, `l2_normalize/1`, and
   `cosine_similarity/2`. **Persist `model`, `dimensions`, and `task` alongside every
   vector** — embedding spaces are model-scoped and mixing them degrades retrieval
@@ -127,6 +136,42 @@
   supervision tree ahead of the agent supervisor; `clear/0` empties it.
 
 ### Fixed
+
+- **A failed turn poisoned the agent.** The user message was committed to context even
+  when the turn failed, so a message the provider had already refused — a rejected
+  attachment, say — was resent on every later turn and every one of them failed. "Fails
+  loudly" became "fails forever". A failed turn now leaves no trace, which also stops a
+  retry after a transient 429 from duplicating the question in history.
+
+- **`chat_stream/3` raised on a rejected attachment.** The modality gate raises inside
+  `ExAgent.Provider.stream/3` because a lazy enumerable has nowhere to carry an error at
+  construction time, and that escaped to the consumer — contradicting the documented
+  promise that streaming never raises, and leaving the agent stuck in `:processing`. It
+  now arrives as the terminal `:done` chunk like every other stream failure, and the
+  agent is released.
+
+- **The agent required a `:tools` field on every provider struct.** `run_tool_loop/3`
+  and the streaming path both did `%{provider | tools: ...}`, so a provider without tool
+  support crashed with a `KeyError` that surfaced as an opaque `{:error, %Error{type:
+  :server}}`. The field is now populated only when the provider declares one.
+
+- **`ExAgent.FileRef` rejected custom providers.** `:provider` was validated against a
+  hardcoded `[:openai, :gemini]`, so a third-party provider implementing the optional
+  `c:ExAgent.Provider.upload/4` callback could not build the reference its own callback
+  has to return. The built-in services construct `%FileRef{}` structs directly and never
+  called `new/1`, so the closed list protected nothing — it only walled out everyone
+  else. Any atom is now accepted, and a reference need only carry a `:file_id` or a
+  `:file_uri`; OpenAI's and Gemini's specific field requirements still apply to them,
+  since their services pattern-match on those fields.
+
+- **`OpenAICompatible` shaped documents as images.** `:document` was declarable through
+  `:modalities` but `format_attachment/1` fell through to `image_url`, so a PDF was sent
+  as an image part and the gateway either rejected it or read nothing. Documents now use
+  the dialect's `file` part — `file_data` for bytes (with the required `filename`) and
+  `file_url` for a URL — which is what a gateway fronting a document-reading model
+  expects. The moduledoc previously claimed documents were unsupported; a model behind
+  OpenRouter or Modal may well read them, so it is a deployment property like every other
+  modality.
 
 - **Gemini streaming produced no text at all.** Gemini terminates SSE events with CRLF,
   but `ExAgent.SSE.take_events/1` split only on `"\n\n"`. A CRLF stream contains no such

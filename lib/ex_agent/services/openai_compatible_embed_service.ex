@@ -3,8 +3,12 @@ defmodule ExAgent.Services.OpenAICompatibleEmbedService do
   HTTP service for embeddings on OpenAI-compatible endpoints (vLLM, Jina, ...).
 
   Unlike OpenAI proper, these endpoints commonly accept `task` and `dimensions`
-  as body fields. The task *strings* are model-specific and have changed between
-  model versions, so the default map is overridable per call via `:task_map`.
+  as body fields.
+
+  Task strings are model-specific and change between versions — Jina v3 uses
+  `"retrieval.passage"`, v5 replaced it with a `"retrieval"` task plus a
+  query/document prompt and added `"text-matching"`. So there are two ways in: a
+  normalized atom translated through `:task_map`, or a raw string sent verbatim.
   """
 
   alias ExAgent.Providers.OpenAICompatible
@@ -29,8 +33,10 @@ defmodule ExAgent.Services.OpenAICompatibleEmbedService do
 
   - `:model` - defaults to the provider's `:model`
   - `:dimensions` - sent as a `dimensions` body field
-  - `:task` - translated through `:task_map` and sent as a `task` body field
-  - `:task_map` - override the task-string translation for this model
+  - `:task` - a normalized atom translated through `:task_map`, or a string sent
+    verbatim as the `task` body field
+  - `:task_map` - override the atom translation for this model; ignored when
+    `:task` is already a string
   """
   @spec embed(OpenAICompatible.t(), [Embeddings.input()], keyword()) ::
           {:ok, Embeddings.t()} | {:error, Error.t()}
@@ -61,9 +67,12 @@ defmodule ExAgent.Services.OpenAICompatibleEmbedService do
   @spec default_task_map() :: %{Embeddings.task() => String.t()}
   def default_task_map, do: @default_task_map
 
-  @spec translate_task(Embeddings.task() | nil, map()) ::
+  @spec translate_task(Embeddings.task_input() | nil, map()) ::
           {:ok, String.t() | nil} | {:error, Error.t()}
   defp translate_task(nil, _task_map), do: {:ok, nil}
+
+  # Already in the endpoint's own vocabulary — nothing to translate.
+  defp translate_task(task, _task_map) when is_binary(task), do: {:ok, task}
 
   defp translate_task(task, task_map) do
     case Map.fetch(task_map, task) do

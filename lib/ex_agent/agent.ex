@@ -40,7 +40,8 @@ defmodule ExAgent.Agent do
           built_in_tools: [atom()],
           status: :idle | :processing | :handed_off,
           reply_to: GenServer.from() | nil,
-          task_ref: reference() | nil
+          task_ref: reference() | nil,
+          pre_turn_context: Context.t() | nil
         }
 
   @max_tool_iterations 10
@@ -215,7 +216,8 @@ defmodule ExAgent.Agent do
       built_in_tools: opts[:built_in_tools] || [],
       status: :idle,
       reply_to: nil,
-      task_ref: nil
+      task_ref: nil,
+      pre_turn_context: nil
     }
 
     {:ok, state}
@@ -237,7 +239,8 @@ defmodule ExAgent.Agent do
 
         state = %{
           state
-          | context: Context.add_message(state.context, user_msg),
+          | pre_turn_context: state.context,
+            context: Context.add_message(state.context, user_msg),
             status: :processing
         }
 
@@ -271,14 +274,15 @@ defmodule ExAgent.Agent do
 
         state = %{
           state
-          | context: Context.add_message(state.context, user_msg),
+          | pre_turn_context: state.context,
+            context: Context.add_message(state.context, user_msg),
             status: :processing
         }
 
         state = evaluate_and_apply_skills(state)
 
         effective_tools = get_effective_tools(state)
-        provider = %{state.provider | tools: effective_tools}
+        provider = with_tools(state.provider, effective_tools)
 
         {:reply, {:ok, provider, state.context.messages, effective_tools, stream_opts}, state}
     end
@@ -308,6 +312,11 @@ defmodule ExAgent.Agent do
   def handle_cast({:commit_stream, messages}, state) do
     context = Enum.reduce(messages, state.context, &Context.add_message(&2, &1))
     {:noreply, %{state | context: context, status: :idle}}
+  end
+
+  @impl true
+  def handle_cast(:abort_stream, state) do
+    {:noreply, %{state | context: rollback(state), status: :idle}}
   end
 
   @impl true
@@ -354,9 +363,17 @@ defmodule ExAgent.Agent do
     {{:handoff, target, context}, %{state | context: loop_state.context, status: :handed_off}}
   end
 
-  defp handle_loop_result({:error, reason, loop_state}, state) do
-    {{:error, reason}, %{state | context: loop_state.context, status: :idle}}
+  # A turn either completes or it did not happen. Committing a failed turn left a
+  # message the provider had already refused — a rejected attachment, say — in
+  # history to be resent on every later turn, breaking the agent permanently; and
+  # it duplicated the question when the caller retried a transient failure.
+  defp handle_loop_result({:error, reason, _loop_state}, state) do
+    {{:error, reason}, %{state | context: rollback(state), status: :idle}}
   end
+
+  @spec rollback(state()) :: Context.t()
+  defp rollback(%{pre_turn_context: nil, context: context}), do: context
+  defp rollback(%{pre_turn_context: context}), do: context
 
   @spec run_tool_loop(state(), [atom()], non_neg_integer()) ::
           {:ok, ExAgent.Response.t(), state()}
@@ -369,7 +386,7 @@ defmodule ExAgent.Agent do
   defp run_tool_loop(state, opts, iteration) do
     effective_tools = get_effective_tools(state)
     messages = state.context.messages
-    provider = %{state.provider | tools: effective_tools}
+    provider = with_tools(state.provider, effective_tools)
 
     case Provider.chat(provider, messages, opts) do
       {:ok, %ExAgent.Response{} = response} ->
@@ -480,8 +497,32 @@ defmodule ExAgent.Agent do
   @spec committing_stream(GenServer.server(), struct(), [Message.t()], keyword(), [Message.t()]) ::
           Enumerable.t()
   defp committing_stream(agent, provider, messages, opts, pending) do
-    provider
-    |> Provider.stream(messages, opts)
+    case open_stream(provider, messages, opts) do
+      {:ok, stream} ->
+        commit_on_completion(agent, stream, pending)
+
+      {:error, error} ->
+        # Refused before any request was made. Release the agent and drop the
+        # turn, so one bad attachment does not poison every later one.
+        GenServer.cast(agent, :abort_stream)
+        [ExAgent.Chunk.error(error)]
+    end
+  end
+
+  # `Provider.stream/3` raises rather than returning a tuple, because a lazy
+  # enumerable has nowhere to carry an error at construction time. `chat_stream/3`
+  # promises never to raise, so the agent converts it here.
+  @spec open_stream(struct(), [Message.t()], keyword()) ::
+          {:ok, Enumerable.t()} | {:error, ExAgent.Error.t()}
+  defp open_stream(provider, messages, opts) do
+    {:ok, Provider.stream(provider, messages, opts)}
+  rescue
+    error in ExAgent.Error -> {:error, error}
+  end
+
+  @spec commit_on_completion(GenServer.server(), Enumerable.t(), [Message.t()]) :: Enumerable.t()
+  defp commit_on_completion(agent, stream, pending) do
+    stream
     |> Stream.transform(
       fn -> {[], []} end,
       fn chunk, acc -> {[chunk], accumulate(chunk, acc)} end,
@@ -534,6 +575,15 @@ defmodule ExAgent.Agent do
   defp normalize_tool_result({:error, reason}), do: {:error, reason}
   defp normalize_tool_result({:handoff, _target, _context} = handoff), do: handoff
   defp normalize_tool_result(other), do: {:ok, other}
+
+  # Services read tools off the provider struct, so the agent populates the field
+  # — but only when the provider declares one. A provider with no tool support
+  # has no reason to carry it, and a KeyError surfacing as an opaque :server
+  # error is a poor way to say so.
+  @spec with_tools(struct(), [Tool.t()]) :: struct()
+  defp with_tools(provider, tools) do
+    if Map.has_key?(provider, :tools), do: %{provider | tools: tools}, else: provider
+  end
 
   @spec get_effective_tools(state()) :: [Tool.t()]
   defp get_effective_tools(%{tools: tools, active_skill: nil}), do: tools

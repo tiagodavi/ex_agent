@@ -418,11 +418,14 @@ defmodule ExAgent do
   - `:model` - embedding model (each provider has its own default; this is never
     the provider's *chat* model)
   - `:dimensions` - output dimensionality, where the provider supports truncation
-  - `:task` - what the embedding is for, from `ExAgent.Embeddings.tasks/0`.
-    Providers that cannot express it return
+  - `:task` - what the embedding is for. Either a normalized atom from
+    `ExAgent.Embeddings.tasks/0`, translated per provider, or a raw string sent
+    verbatim for a vocabulary this library does not model (Jina's
+    `"text-matching"`, a Gemini `taskType` newer than this release). Providers
+    that cannot express a task at all return
     `{:error, %ExAgent.Error{type: :unsupported}}` rather than dropping it
-  - `:task_map` - override the provider's task-string translation (OpenAI-compatible
-    endpoints only, where the strings are model-specific)
+  - `:task_map` - override the atom translation (OpenAI-compatible endpoints
+    only, where the strings are model-specific); ignored when `:task` is a string
 
   ## Examples
 

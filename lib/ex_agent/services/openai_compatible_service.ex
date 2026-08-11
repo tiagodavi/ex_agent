@@ -138,10 +138,30 @@ defmodule ExAgent.Services.OpenAICompatibleService do
   end
 
   # Media parts follow the `{"type" => "<kind>_url", "<kind>_url" => %{"url" => ...}}`
-  # shape, where the URL may be a `data:` URI. Whether a given served model
-  # accepts video_url/audio_url is model-dependent, which is why `:modalities`
-  # must be declared per deployment.
+  # shape, where the URL may be a `data:` URI. Documents use the dialect's `file`
+  # part instead. Whether a served model accepts any of them is model-dependent,
+  # which is why `:modalities` must be declared per deployment.
   @spec format_attachment(map()) :: map()
+  defp format_attachment(%{modality: :document, kind: :url, url: url} = attachment) do
+    file = %{"file_url" => url}
+    file = if attachment.filename, do: Map.put(file, "filename", attachment.filename), else: file
+
+    %{"type" => "file", "file" => file}
+    |> merge_provider_opts(attachment)
+  end
+
+  defp format_attachment(%{modality: :document} = attachment) do
+    # `filename` is required alongside `file_data`; gateways reject the part
+    # without it, so fall back rather than omitting the key.
+    filename = Map.get(attachment, :filename) || "upload"
+
+    %{
+      "type" => "file",
+      "file" => %{"filename" => filename, "file_data" => attachment_url(attachment)}
+    }
+    |> merge_provider_opts(attachment)
+  end
+
   defp format_attachment(%{modality: modality} = attachment) do
     key = part_key(modality)
 
@@ -150,7 +170,6 @@ defmodule ExAgent.Services.OpenAICompatibleService do
   end
 
   @spec part_key(Source.modality()) :: String.t()
-  defp part_key(:image), do: "image_url"
   defp part_key(:video), do: "video_url"
   defp part_key(:audio), do: "audio_url"
   defp part_key(_modality), do: "image_url"

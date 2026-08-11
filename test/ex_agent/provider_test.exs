@@ -15,12 +15,12 @@ defmodule ExAgent.ProviderTest do
     %Gemini{api_key: "AIza", model: "gemini-2.0-flash", req: Req.new(plug: plug)}
   end
 
+  defp openai_ok_body do
+    %{"choices" => [%{"message" => %{"role" => "assistant", "content" => "seen"}}]}
+  end
+
   defp openai_ok do
-    fn conn ->
-      Req.Test.json(conn, %{
-        "choices" => [%{"message" => %{"role" => "assistant", "content" => "seen"}}]
-      })
-    end
+    fn conn -> Req.Test.json(conn, openai_ok_body()) end
   end
 
   defp gemini_ok do
@@ -72,6 +72,42 @@ defmodule ExAgent.ProviderTest do
       provider = Gemini.new(api_key: "AIza", modalities: [:text, :image])
 
       assert Provider.supported_modalities(provider) == [:text, :image]
+    end
+  end
+
+  # The agent populates :tools on the provider struct so services can read it,
+  # but a provider with no tool support has no reason to carry the field — and a
+  # KeyError surfacing as an opaque :server error is a poor way to say so.
+  describe "providers without a :tools field" do
+    test "given a chat turn, then the agent does not require the field" do
+      {:ok, pid} = ExAgent.start_agent(provider: MinimalProvider.new(api_key: "x"))
+      on_exit(fn -> if Process.alive?(pid), do: ExAgent.stop_agent(pid) end)
+
+      assert {:ok, %ExAgent.Response{content: "ok"}} = ExAgent.chat(pid, "hi")
+    end
+
+    test "given a provider that does have :tools, then the agent still populates it" do
+      test_pid = self()
+
+      plug = fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:tools, Jason.decode!(body)["tools"]})
+        Req.Test.json(conn, openai_ok_body())
+      end
+
+      {:ok, tool} =
+        ExAgent.Tool.new(
+          name: "ping",
+          description: "ping",
+          parameters: %{},
+          function: fn _ -> {:ok, "pong"} end
+        )
+
+      {:ok, pid} = ExAgent.start_agent(provider: openai_provider(plug), tools: [tool])
+      on_exit(fn -> if Process.alive?(pid), do: ExAgent.stop_agent(pid) end)
+
+      assert {:ok, _} = ExAgent.chat(pid, "hi")
+      assert_received {:tools, [%{"function" => %{"name" => "ping"}}]}
     end
   end
 

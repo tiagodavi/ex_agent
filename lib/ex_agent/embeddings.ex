@@ -47,6 +47,22 @@ defmodule ExAgent.Embeddings do
           | :fact_verification
           | :code_query
 
+  @typedoc """
+  What to pass as `:task`.
+
+  A normalized `t:task/0` atom is portable — each provider translates it into its
+  own dialect, and a typo is rejected.
+
+  A raw string is accepted **only by `ExAgent.Providers.OpenAICompatible`**, where
+  the vocabulary belongs to whatever model the endpoint serves and changes between
+  versions (Jina v3's `"retrieval.passage"` became a `"retrieval"` task plus a
+  prompt in v5). It is sent verbatim, with no translation and no validation.
+
+  Gemini's `taskType` is a closed enum and OpenAI has no task field at all, so both
+  take the atom form only.
+  """
+  @type task_input :: task() | String.t()
+
   @type input :: String.t() | %{optional(:content) => String.t(), optional(:title) => String.t()}
 
   @type t :: %__MODULE__{
@@ -54,7 +70,7 @@ defmodule ExAgent.Embeddings do
           model: String.t(),
           provider: module(),
           dimensions: pos_integer() | nil,
-          task: task() | nil,
+          task: task_input() | nil,
           usage: map()
         }
 

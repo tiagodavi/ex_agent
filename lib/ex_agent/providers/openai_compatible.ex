@@ -44,6 +44,21 @@ defmodule ExAgent.Providers.OpenAICompatible do
   does not. It defaults to `[:text]`, so a misconfigured deployment fails loudly
   rather than firing video at a model that cannot read it.
 
+  All four media modalities are declarable — `:image`, `:video`, `:audio`, and
+  `:document`. Documents are shaped as the dialect's `file` content part
+  (`file_data` for bytes, `file_url` for a URL), which is what a gateway fronting
+  a document-reading model expects:
+
+      OpenAICompatible.new(
+        base_url: "https://openrouter.ai/api/v1",
+        model: "anthropic/claude-sonnet-4.5",
+        api_key: key,
+        modalities: [:text, :image, :document]
+      )
+
+  Declare only what the served model actually reads: nothing here is validated
+  against the endpoint until the request is made.
+
   ## No Files API
 
   Compatible endpoints have no upload endpoint, so bytes are always sent as
@@ -51,8 +66,6 @@ defmodule ExAgent.Providers.OpenAICompatible do
   `{:error, %ExAgent.Error{type: :unsupported}}` telling you to host the asset at
   a URL the container can reach — it is never silently truncated or retried.
 
-  Documents are not supported: there is no portable content part for them.
-  Extract the text or rasterize the pages first.
 
   ## Verifying the served model
 
