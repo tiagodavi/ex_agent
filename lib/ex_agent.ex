@@ -567,5 +567,5 @@ defmodule ExAgent do
   Transfers conversation context to a target agent.
   """
   @spec handoff(pid() | atom(), Context.t()) :: :ok
-  defdelegate handoff(target, context), to: Handoff, as: :execute
+  defdelegate handoff(target, context), to: Handoff, as: :run
 end

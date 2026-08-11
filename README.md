@@ -1024,7 +1024,7 @@ That is all `handoff/2` does. It copies the context into the target's state:
 
 ```elixir
 # ExAgent.Patterns.Handoff
-def execute(target, context), do: GenServer.cast(target, {:receive_handoff, context})
+def run(target, context), do: GenServer.cast(target, {:receive_handoff, context})
 
 # ExAgent.Agent
 def handle_cast({:receive_handoff, context}, state) do
@@ -1370,6 +1370,7 @@ Reflection.run(task, generator: ..., critic: ...)
 MapReduce.run(sections, target, map: ..., reduce: ...)
 Consensus.run(prompt, voters: ...)
 Subagents.run(specs_with_inputs)          # several specialists in parallel
+Handoff.run(target, context)              # deliver the conversation
 
 Subagents.tools(specs)                    # -> [%ExAgent.Tool{}]
 Handoff.tools(specs)                      # -> [%ExAgent.Tool{}]

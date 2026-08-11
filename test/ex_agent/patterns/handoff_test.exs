@@ -82,7 +82,7 @@ defmodule ExAgent.Patterns.HandoffTest do
   end
 
   # Edge case tests - integration with Agent
-  describe "execute/2" do
+  describe "run/2" do
     test "sends context to target agent via cast" do
       provider = build_provider(fn conn -> Req.Test.json(conn, success_response("Ok")) end)
       {:ok, target_pid} = Agent.start_link(provider: provider)
@@ -90,7 +90,7 @@ defmodule ExAgent.Patterns.HandoffTest do
       {:ok, msg} = Message.new(role: :system, content: "Handoff context")
       context = Context.new(messages: [msg])
 
-      Handoff.execute(target_pid, context)
+      Handoff.run(target_pid, context)
       :timer.sleep(10)
 
       received_context = Agent.get_context(target_pid)
@@ -113,7 +113,7 @@ defmodule ExAgent.Patterns.HandoffTest do
 
       {:ok, sys_msg} = Message.new(role: :system, content: "Handoff: billing issue")
       context = Context.new(messages: [sys_msg])
-      Handoff.execute(target_pid, context)
+      Handoff.run(target_pid, context)
       :timer.sleep(10)
 
       {:ok, response} = Agent.chat(target_pid, "What about my refund?")

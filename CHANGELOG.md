@@ -68,7 +68,7 @@ Found in a pre-release audit of the code added for this version.
   | `Subagents.build_orchestrator_tools/1` | `Subagents.tools/1` |
   | `Subagents.invoke_subagents_parallel/2` | `Subagents.run/2` |
   | `Handoff.build_handoff_tool/3` | `Handoff.tools/1` |
-  | `Handoff.execute_handoff/2` | `Handoff.execute/2` |
+  | `Handoff.execute_handoff/2` | `Handoff.run/2` |
   | `Router.route/2` | `Router.run/2` |
   | `Skills.evaluate_skills/2` | `Skills.evaluate/2` |
 

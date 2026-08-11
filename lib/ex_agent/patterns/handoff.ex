@@ -73,10 +73,14 @@ defmodule ExAgent.Patterns.Handoff do
   end
 
   @doc """
-  Sends a context to the target agent, which adopts it and returns to idle.
+  Delivers a context to the target agent, which adopts it and returns to idle.
+
+  This is the pattern's entry point, named `run/2` like every other pattern.
+  Unlike the others it returns `:ok` rather than a result: the work here is the
+  transfer itself.
   """
-  @spec execute(pid() | atom(), Context.t()) :: :ok
-  def execute(target, %Context{} = context) do
+  @spec run(pid() | atom(), Context.t()) :: :ok
+  def run(target, %Context{} = context) do
     GenServer.cast(target, {:receive_handoff, context})
   end
 end
