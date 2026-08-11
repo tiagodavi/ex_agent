@@ -5,29 +5,26 @@ defmodule ExAgent.EmbeddingsTest do
 
   alias ExAgent.Embeddings
 
-  describe "tasks/0 and valid_task?/1" do
-    test "given the vocabulary, then it is exactly the eight normalized tasks" do
-      assert Enum.sort(Embeddings.tasks()) ==
-               Enum.sort([
-                 :retrieval_query,
-                 :retrieval_document,
-                 :similarity,
-                 :classification,
-                 :clustering,
-                 :question_answering,
-                 :fact_verification,
-                 :code_query
-               ])
+  describe "normalize_args/1" do
+    test "given a keyword list, then it passes through" do
+      assert {:ok, [prompt_name: :query]} = Embeddings.normalize_args(prompt_name: :query)
     end
 
-    test "given a known task, then it validates" do
-      for task <- Embeddings.tasks(), do: assert(Embeddings.valid_task?(task))
+    test "given a map, then it becomes a keyword list" do
+      assert {:ok, pairs} = Embeddings.normalize_args(%{prompt_name: :query})
+      assert pairs == [prompt_name: :query]
     end
 
-    test "given an unknown task, then it does not validate" do
-      refute Embeddings.valid_task?(:summarization)
-      refute Embeddings.valid_task?("retrieval_query")
-      refute Embeddings.valid_task?(nil)
+    test "given nil, then there are no args" do
+      assert {:ok, []} = Embeddings.normalize_args(nil)
+    end
+
+    test "given a non-keyword list, then it is rejected" do
+      assert :error = Embeddings.normalize_args(["prompt_name"])
+    end
+
+    test "given a string, then it is rejected" do
+      assert :error = Embeddings.normalize_args("prompt_name=query")
     end
   end
 

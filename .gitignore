@@ -26,3 +26,4 @@ ex_agent-*.tar
 .claude
 .DS_Store
 .run
+.env

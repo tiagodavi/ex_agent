@@ -5,6 +5,10 @@ defmodule ExAgent.Providers.OpenAICompatible do
   Covers self-hosted vLLM (including behind Modal), OpenRouter, Together, Groq,
   and anything else exposing `POST {base_url}/chat/completions`.
 
+  Chat only. Embeddings need a task vocabulary, and "any OpenAI-compatible
+  endpoint" cannot have one — see `ExAgent.Providers.JinaV5` for the shape an
+  embeddings provider takes.
+
   ## Modal (vLLM behind Modal's proxy auth)
 
       provider = ExAgent.Providers.OpenAICompatible.new(
@@ -218,11 +222,6 @@ defmodule ExAgent.Providers.OpenAICompatible do
 
   @impl true
   def supported_modalities(%__MODULE__{modalities: modalities}), do: modalities
-
-  @impl true
-  def embed(provider, inputs, opts \\ []) do
-    ExAgent.Services.OpenAICompatibleEmbedService.embed(provider, inputs, opts)
-  end
 
   @spec build_req(t()) :: Req.Request.t()
   defp build_req(%__MODULE__{} = provider) do

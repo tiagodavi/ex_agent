@@ -124,4 +124,7 @@ defmodule ExAgent.Providers.Gemini do
   def embed(provider, inputs, opts \\ []) do
     ExAgent.Services.GeminiEmbedService.embed(provider, inputs, opts)
   end
+
+  @impl true
+  def embedding_tasks(_provider), do: ExAgent.Services.GeminiEmbedService.tasks()
 end

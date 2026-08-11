@@ -8,6 +8,7 @@ defmodule ExAgent.Services.OpenAIEmbedService do
   """
 
   alias ExAgent.Providers.OpenAI
+  alias ExAgent.Services.EmbedArgs
   alias ExAgent.{Embeddings, Error}
 
   @default_model "text-embedding-3-small"
@@ -17,6 +18,17 @@ defmodule ExAgent.Services.OpenAIEmbedService do
   # want to batch.
   @max_inputs 2048
 
+  # OpenAI has no task field at all, so there is no vocabulary to declare.
+  @tasks []
+
+  @allowed_args [encoding_format: ["float", "base64"], user: :any]
+
+  @doc """
+  Returns the task atoms this service accepts — none.
+  """
+  @spec tasks() :: [Embeddings.task()]
+  def tasks, do: @tasks
+
   @doc """
   Generates embeddings for `inputs`.
 
@@ -25,7 +37,10 @@ defmodule ExAgent.Services.OpenAIEmbedService do
   - `:model` - defaults to `#{inspect(@default_model)}`
   - `:dimensions` - truncate output to this many dimensions
   - `:task` - unsupported; any non-nil value returns an error
+  - `:args` - `encoding_format` (`"float"` or `"base64"`) and `user`; any other
+    key is rejected
   """
+
   @spec embed(OpenAI.t(), [Embeddings.input()], keyword()) ::
           {:ok, Embeddings.t()} | {:error, Error.t()}
   def embed(%OpenAI{} = provider, inputs, opts \\ []) do
@@ -34,10 +49,12 @@ defmodule ExAgent.Services.OpenAIEmbedService do
 
     with :ok <- reject_task(opts[:task]),
          :ok <- check_batch_size(inputs),
+         {:ok, args} <- EmbedArgs.validate_args(opts[:args], @allowed_args, OpenAI),
          {:ok, texts} <- to_texts(inputs) do
       body =
         %{"model" => model, "input" => texts}
         |> maybe_put("dimensions", dimensions)
+        |> merge_args(args)
 
       provider.req
       |> Req.post(url: "/embeddings", json: body, receive_timeout: :timer.minutes(5))
@@ -64,6 +81,11 @@ defmodule ExAgent.Services.OpenAIEmbedService do
     else
       :ok
     end
+  end
+
+  @spec merge_args(map(), keyword()) :: map()
+  defp merge_args(body, args) do
+    Enum.reduce(args, body, fn {key, value}, acc -> Map.put(acc, to_string(key), value) end)
   end
 
   @spec reject_task(Embeddings.task() | nil) :: :ok | {:error, Error.t()}

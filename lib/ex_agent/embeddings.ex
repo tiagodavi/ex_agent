@@ -15,53 +15,48 @@ defmodule ExAgent.Embeddings do
   Persist `:model`, `:dimensions`, and `:task` next to the vector itself, so a
   later model change is a detectable migration rather than a quiet regression.
 
-  ## Tasks
+  ## Tasks belong to the provider
 
-  Providers express "what is this embedding for" in incompatible ways — an enum
-  field, a text prefix, or a body parameter. `ExAgent.embed/3` takes one
-  normalized vocabulary and translates:
+  "What is this embedding for" is asked in incompatible ways, and the vocabulary
+  belongs to the **model**, not to this library: Gemini's `taskType` is a closed
+  enum of eight values, Jina v5 takes four task names plus a separate
+  `prompt_name`, and OpenAI has no task field at all. There is no portable middle
+  — a shared vocabulary either loses the distinctions a model actually makes or
+  invents ones it does not.
 
-  | Task | Use |
-  |------|-----|
-  | `:retrieval_query` | The search query side of retrieval |
-  | `:retrieval_document` | The indexed-document side of retrieval |
-  | `:similarity` | Symmetric semantic similarity |
-  | `:classification` | Features for a classifier |
-  | `:clustering` | Features for clustering |
-  | `:question_answering` | Question side of QA retrieval |
-  | `:fact_verification` | Claim side of fact checking |
-  | `:code_query` | Natural-language query over code |
+  So each provider declares its own atoms and rejects anything outside them:
 
-  `:retrieval_query` and `:retrieval_document` are deliberately distinct.
-  Asymmetric retrieval needs both, and using one where the other belongs
-  degrades recall invisibly.
+      ExAgent.embedding_tasks(gemini)   #=> [:retrieval_query, :retrieval_document, ...]
+      ExAgent.embedding_tasks(jina)     #=> [:retrieval, :text_matching, :clustering, :classification]
+
+  A task the provider does not know is an error naming the ones it does, never a
+  field quietly dropped: a dropped task returns HTTP 200 with plausible floats
+  that land in a vector store and degrade retrieval forever, with no later signal.
+
+  ## Extra model arguments
+
+  `:args` forwards key–value pairs into the request body for parameters this
+  library does not model — Jina's `prompt_name`, OpenAI's `encoding_format`:
+
+      ExAgent.embed(jina, chunks, task: :retrieval, args: [prompt_name: :document])
+
+  Each provider validates them against what its own endpoint accepts and rejects
+  unknown keys, so a typo fails loudly instead of being ignored by the server.
   """
-
-  @type task ::
-          :retrieval_query
-          | :retrieval_document
-          | :similarity
-          | :classification
-          | :clustering
-          | :question_answering
-          | :fact_verification
-          | :code_query
 
   @typedoc """
-  What to pass as `:task`.
+  What to pass as `:task`: an atom from the provider's own vocabulary.
 
-  A normalized `t:task/0` atom is portable — each provider translates it into its
-  own dialect, and a typo is rejected.
-
-  A raw string is accepted **only by `ExAgent.Providers.OpenAICompatible`**, where
-  the vocabulary belongs to whatever model the endpoint serves and changes between
-  versions (Jina v3's `"retrieval.passage"` became a `"retrieval"` task plus a
-  prompt in v5). It is sent verbatim, with no translation and no validation.
-
-  Gemini's `taskType` is a closed enum and OpenAI has no task field at all, so both
-  take the atom form only.
+  Discover it with `ExAgent.embedding_tasks/1`. There is deliberately no shared
+  vocabulary and no verbatim-string escape hatch — a task string an endpoint does
+  not recognize is accepted with a 200 and quietly wrong vectors.
   """
-  @type task_input :: task() | String.t()
+  @type task :: atom()
+
+  @typedoc """
+  Extra request-body parameters, validated by the provider before being sent.
+  """
+  @type args :: keyword() | map()
 
   @type input :: String.t() | %{optional(:content) => String.t(), optional(:title) => String.t()}
 
@@ -70,40 +65,28 @@ defmodule ExAgent.Embeddings do
           model: String.t(),
           provider: module(),
           dimensions: pos_integer() | nil,
-          task: task_input() | nil,
+          task: task() | nil,
           usage: map()
         }
 
   @enforce_keys [:vectors, :model, :provider]
   defstruct [:vectors, :model, :provider, :dimensions, :task, usage: %{}]
 
-  @tasks ~w(retrieval_query retrieval_document similarity classification
-            clustering question_answering fact_verification code_query)a
-
   @doc """
-  Returns the normalized task vocabulary.
+  Normalizes `:args` into a keyword list, rejecting anything else.
 
-  ## Examples
-
-      iex> :retrieval_query in ExAgent.Embeddings.tasks()
-      true
+  Providers call this before validating against their own allowlist, so `:args`
+  can be given as either a keyword list or a map.
   """
-  @spec tasks() :: [task()]
-  def tasks, do: @tasks
+  @spec normalize_args(term()) :: {:ok, keyword()} | :error
+  def normalize_args(nil), do: {:ok, []}
+  def normalize_args(args) when is_map(args), do: {:ok, Map.to_list(args)}
 
-  @doc """
-  Returns whether `task` is part of the normalized vocabulary.
+  def normalize_args(args) when is_list(args) do
+    if Keyword.keyword?(args), do: {:ok, args}, else: :error
+  end
 
-  ## Examples
-
-      iex> ExAgent.Embeddings.valid_task?(:clustering)
-      true
-
-      iex> ExAgent.Embeddings.valid_task?(:summarization)
-      false
-  """
-  @spec valid_task?(term()) :: boolean()
-  def valid_task?(task), do: task in @tasks
+  def normalize_args(_args), do: :error
 
   @doc """
   Scales a vector to unit length.

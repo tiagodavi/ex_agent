@@ -47,7 +47,13 @@ defmodule ExAgent do
   Persist `model`, `dimensions`, and `task` alongside every vector — see
   `ExAgent.Embeddings`.
 
-      {:ok, docs} = ExAgent.embed(provider, chunks, task: :retrieval_document)
+      {:ok, docs} = ExAgent.embed(gemini, chunks, task: :retrieval_document)
+
+  Task vocabularies belong to the provider; `embedding_tasks/1` lists them.
+  `ExAgent.Providers.JinaV5` is embeddings-only:
+
+      {:ok, docs} =
+        ExAgent.embed(jina, chunks, task: :retrieval, args: [prompt_name: :document])
 
   ## Failures
 
@@ -423,14 +429,14 @@ defmodule ExAgent do
   - `:model` - embedding model (each provider has its own default; this is never
     the provider's *chat* model)
   - `:dimensions` - output dimensionality, where the provider supports truncation
-  - `:task` - what the embedding is for. Either a normalized atom from
-    `ExAgent.Embeddings.tasks/0`, translated per provider, or a raw string sent
-    verbatim for a vocabulary this library does not model (Jina's
-    `"text-matching"`, a Gemini `taskType` newer than this release). Providers
-    that cannot express a task at all return
-    `{:error, %ExAgent.Error{type: :unsupported}}` rather than dropping it
-  - `:task_map` - override the atom translation (OpenAI-compatible endpoints
-    only, where the strings are model-specific); ignored when `:task` is a string
+  - `:task` - what the embedding is for, as an atom from **that provider's** own
+    vocabulary — see `embedding_tasks/1`. There is no shared set: Gemini's
+    `taskType` enum, Jina v5's four task names, and OpenAI's absent task field
+    have no common middle. An unknown task is an error naming the accepted ones,
+    never a silently dropped field
+  - `:args` - extra request-body parameters this library does not model, as a
+    keyword list or map (`args: [prompt_name: :document]`). Each provider
+    validates them against its own endpoint and rejects unknown keys
 
   ## Examples
 
@@ -461,6 +467,21 @@ defmodule ExAgent do
 
   def embed(provider, inputs, opts) when is_list(inputs),
     do: Provider.embed(provider, inputs, opts)
+
+  @doc """
+  Returns the embedding task atoms `provider` accepts, or `[]` if it has none.
+
+  Vocabularies are per provider, so this is how you discover one rather than
+  guessing at a shared list:
+
+      ExAgent.embedding_tasks(ExAgent.Providers.JinaV5.new())
+      #=> [:retrieval, :text_matching, :clustering, :classification]
+
+      ExAgent.embedding_tasks(ExAgent.Providers.OpenAI.new(api_key: "sk-..."))
+      #=> []
+  """
+  @spec embedding_tasks(struct()) :: [ExAgent.Embeddings.task()]
+  defdelegate embedding_tasks(provider), to: Provider
 
   # --- Patterns ---
 

@@ -32,10 +32,10 @@ defmodule ExAgent.LiveApiTest do
       export EX_AGENT_COMPAT_HEADERS='Modal-Key: k, Modal-Secret: s'  # optional
       export EX_AGENT_COMPAT_MODALITIES=text,image,video # optional, default text
 
-      # embeddings usually live on a separate deployment; only then are they tested
-      export EX_AGENT_COMPAT_EMBED_MODEL=jinaai/jina-embeddings-v3
-      export EX_AGENT_COMPAT_EMBED_BASE_URL=https://your-embed-app.modal.run/v1  # optional
-      export EX_AGENT_COMPAT_EMBED_API_KEY=...                                   # optional
+      # Jina v5 embeddings server (see ExAgent.Providers.JinaV5 for the contract)
+      export EX_AGENT_JINA_BASE_URL=https://your-embed-app.modal.run
+      export EX_AGENT_JINA_API_KEY=...                                 # optional, bearer
+      export EX_AGENT_JINA_HEADERS='Modal-Key: k, Modal-Secret: s'     # optional
 
   ## Optional extras
 
@@ -53,7 +53,7 @@ defmodule ExAgent.LiveApiTest do
 
   alias ExAgent.{Chunk, Embeddings, Error, Message, Provider, Response, Roles, Skill, Tool}
   alias ExAgent.Patterns.Subagents
-  alias ExAgent.Providers.{Gemini, OpenAI, OpenAICompatible}
+  alias ExAgent.Providers.{Gemini, JinaV5, OpenAI, OpenAICompatible}
 
   @moduletag :external
   # Real models think slowly; a streamed reasoning turn can take minutes.
@@ -67,9 +67,9 @@ defmodule ExAgent.LiveApiTest do
   @compat_key System.get_env("EX_AGENT_COMPAT_API_KEY")
   @compat_headers System.get_env("EX_AGENT_COMPAT_HEADERS")
   @compat_modalities System.get_env("EX_AGENT_COMPAT_MODALITIES")
-  @compat_embed_model System.get_env("EX_AGENT_COMPAT_EMBED_MODEL")
-  @compat_embed_base_url System.get_env("EX_AGENT_COMPAT_EMBED_BASE_URL")
-  @compat_embed_key System.get_env("EX_AGENT_COMPAT_EMBED_API_KEY")
+  @jina_base_url System.get_env("EX_AGENT_JINA_BASE_URL")
+  @jina_key System.get_env("EX_AGENT_JINA_API_KEY")
+  @jina_headers System.get_env("EX_AGENT_JINA_HEADERS")
 
   @image_url System.get_env("EX_AGENT_TEST_IMAGE_URL")
   @image_mime System.get_env("EX_AGENT_TEST_IMAGE_MIME")
@@ -90,16 +90,11 @@ defmodule ExAgent.LiveApiTest do
   @skip_video_path !@video_path && "EX_AGENT_TEST_VIDEO_PATH is not set"
   @skip_video_url !@video_url && "EX_AGENT_TEST_VIDEO_URL is not set"
 
+  @skip_jina !@jina_base_url && "EX_AGENT_JINA_BASE_URL is not set"
+
   # `||` short-circuits while the module is being compiled, which would leave the
   # later attribute looking unread; taking the first truthy entry of a list reads
   # every one of them.
-  @skip_compat_embed Enum.find(
-                       [
-                         @skip_compat,
-                         !@compat_embed_model && "EX_AGENT_COMPAT_EMBED_MODEL is not set"
-                       ],
-                       & &1
-                     ) || false
   @skip_openai_image_url Enum.find([@skip_openai, @skip_image_url], & &1) || false
   @skip_gemini_image_url Enum.find([@skip_gemini, @skip_image_url], & &1) || false
   @skip_gemini_video_path Enum.find([@skip_gemini, @skip_video_path], & &1) || false
@@ -164,6 +159,9 @@ defmodule ExAgent.LiveApiTest do
     pid
   end
 
+  defp magnitude(vector),
+    do: vector |> Enum.reduce(0.0, fn value, acc -> acc + value * value end) |> :math.sqrt()
+
   defp texts(chunks),
     do: chunks |> Enum.filter(&(&1.type == :text_delta)) |> Enum.map(& &1.text)
 
@@ -224,12 +222,11 @@ defmodule ExAgent.LiveApiTest do
     )
   end
 
-  defp compat_embed do
-    OpenAICompatible.new(
-      base_url: @compat_embed_base_url || @compat_base_url,
-      model: @compat_embed_model,
-      api_key: @compat_embed_key || @compat_key,
-      headers: parse_headers(@compat_headers)
+  defp jina do
+    JinaV5.new(
+      base_url: @jina_base_url,
+      api_key: @jina_key,
+      headers: parse_headers(@jina_headers)
     )
   end
 
@@ -642,8 +639,8 @@ defmodule ExAgent.LiveApiTest do
       assert result.task == :retrieval_document
     end
 
-    test "accepts every normalized task" do
-      for task <- Embeddings.tasks() do
+    test "accepts every task it declares" do
+      for task <- ExAgent.embedding_tasks(gemini()) do
         assert {:ok, %Embeddings{task: ^task}} = ExAgent.embed(gemini(), ["hello"], task: task),
                "task #{inspect(task)} was rejected"
       end
@@ -958,23 +955,106 @@ defmodule ExAgent.LiveApiTest do
     end
   end
 
-  # A chat container and an embedding container are usually separate deployments,
-  # so this needs its own model (and often its own URL and credential) rather than
-  # assuming the chat endpoint serves both.
-  describe "OpenAICompatible · embeddings" do
-    @describetag :compat
-    @describetag skip: @skip_compat_embed
+  # v5's `task` plus `prompt_name` split is the whole reason this provider is
+  # versioned. Only a live run proves the endpoint accepts the pair as sent —
+  # a wrong `prompt_name` is a 200 with silently worse recall, not an error.
+  describe "JinaV5 · embeddings" do
+    @describetag :jina
+    @describetag skip: @skip_jina
 
     test "embeds a batch, one vector per input" do
-      assert {:ok, %Embeddings{} = result} = ExAgent.embed(compat_embed(), ["alpha", "beta"])
+      assert {:ok, %Embeddings{} = result} =
+               ExAgent.embed(jina(), ["alpha", "beta"], task: :clustering)
 
       assert length(result.vectors) == 2
-      assert result.model == @compat_embed_model
+      assert result.dimensions == 1024
+      assert result.provider == JinaV5
+      assert result.model =~ "jina"
     end
 
-    test "a task is translated into the endpoint's own vocabulary" do
-      assert {:ok, %Embeddings{task: :retrieval_document}} =
-               ExAgent.embed(compat_embed(), ["alpha"], task: :retrieval_document)
+    test "a retrieval pair encodes each side with its own prompt_name" do
+      provider = jina()
+      text = "OTP supervisors restart crashed child processes."
+
+      assert {:ok, document} =
+               ExAgent.embed(provider, [text], task: :retrieval, args: [prompt_name: :document])
+
+      assert {:ok, query} =
+               ExAgent.embed(provider, "what restarts crashed processes?",
+                 task: :retrieval,
+                 args: [prompt_name: :query]
+               )
+
+      assert document.task == :retrieval
+
+      # Asymmetric retrieval only works if the two sides land in the same space
+      # while being encoded differently.
+      similarity = Embeddings.cosine_similarity(hd(document.vectors), hd(query.vectors))
+
+      assert similarity > 0.4, "query and document should be related, got #{similarity}"
+    end
+
+    test "every declared task is accepted by the server" do
+      for task <- ExAgent.embedding_tasks(jina()) do
+        # `:retrieval` is the one task that demands a prompt_name.
+        opts =
+          if task == :retrieval,
+            do: [task: task, args: [prompt_name: :query]],
+            else: [task: task]
+
+        assert {:ok, %Embeddings{task: ^task}} = ExAgent.embed(jina(), ["alpha"], opts),
+               "#{task} was rejected"
+      end
+    end
+
+    test "a Matryoshka dimension truncates, and the server re-normalizes" do
+      assert {:ok, result} =
+               ExAgent.embed(jina(), ["alpha"], task: :clustering, dimensions: 256)
+
+      assert result.dimensions == 256
+      assert length(hd(result.vectors)) == 256
+      assert_in_delta magnitude(hd(result.vectors)), 1.0, 1.0e-4
+    end
+
+    test "normalize: false returns the raw truncated vector" do
+      # Proves the client does not re-normalize behind the caller's back.
+      assert {:ok, result} =
+               ExAgent.embed(jina(), ["alpha"],
+                 task: :clustering,
+                 dimensions: 256,
+                 args: [normalize: false]
+               )
+
+      refute_in_delta magnitude(hd(result.vectors)), 1.0, 1.0e-3
+    end
+
+    # Each of these is a rule the server enforces too; catching them locally
+    # saves the round trip and says what to do instead.
+    test "retrieval without a prompt_name is refused before the request" do
+      assert {:error, %Error{type: :invalid_request} = error} =
+               ExAgent.embed(jina(), ["alpha"], task: :retrieval)
+
+      assert error.message =~ "prompt_name"
+    end
+
+    test "an unknown extra arg is refused before the request" do
+      assert {:error, %Error{type: :invalid_request} = error} =
+               ExAgent.embed(jina(), ["alpha"], task: :clustering, args: [prompt: "document"])
+
+      assert error.message =~ "does not accept :prompt"
+    end
+
+    test "an untrained dimension is refused before the request" do
+      assert {:error, %Error{type: :invalid_request}} =
+               ExAgent.embed(jina(), ["alpha"], task: :clustering, dimensions: 300)
+    end
+
+    test "chat is unsupported, with a message that points elsewhere" do
+      {:ok, message} = Message.new(role: :user, content: "hi")
+
+      assert {:error, %Error{type: :unsupported} = error} = Provider.chat(jina(), [message])
+
+      assert error.message =~ "embeddings model"
     end
   end
 

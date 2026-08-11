@@ -10,7 +10,7 @@ any OpenAI-compatible endpoint; OTP primitives orchestrate them.
 - **Structured streaming** — text, reasoning, tool-call deltas, usage as typed chunks
 - **Automatic tool execution** — define a tool once; the agent loops until done
 - **Multimodal** — images, PDFs, video, audio from a path, bytes, a URL, or an upload
-- **Embeddings for RAG** — one task vocabulary across providers, provenance on every result
+- **Embeddings for RAG** — each provider's own task vocabulary, provenance on every result
 - **Normalized errors** — one `%ExAgent.Error{}` with a `retryable?` flag
 - **Fails loudly** — unsupported input is rejected before a request is built, never dropped
 - **4 multi-agent patterns** — Subagents, Skills, Handoffs, Router
@@ -42,7 +42,7 @@ response.content   #=> "Elixir is a functional programming language..."
 | [Providers](#providers) · [Roles](#roles) | Configure who answers |
 | [Agents](#agents) · [Tools](#tools) · [Streaming](#streaming) | Run a conversation |
 | [Attachments](#attachments) · [Uploads](#uploads) | Send files |
-| [Embeddings](#embeddings) | RAG |
+| [Embeddings](#embeddings) · [Jina v5](#jina-v5) | RAG |
 | [Patterns](#multi-agent-patterns) | Subagents, Skills, Handoffs, Router |
 | [Observability](#observability) | Telemetry events |
 | [Recipes](#recipes) | Retry, RAG, multi-tenant, LiveView, testing |
@@ -162,9 +162,7 @@ config :ex_agent, :roles,
              base_url: System.fetch_env!("MODAL_URL") <> "/v1",
              model: "Qwen/Qwen3-VL-8B-Instruct",
              modalities: [:text, :image]},
-  embed: {ExAgent.Providers.OpenAICompatible,
-            base_url: System.fetch_env!("JINA_URL") <> "/v1",
-            model: "jinaai/jina-embeddings-v3"}
+  embed: {ExAgent.Providers.JinaV5, base_url: System.fetch_env!("JINA_URL")}
 ```
 
 Role names are arbitrary atoms — `:ocr`, `:cheap_summarizer`, whatever fits. A bare module
@@ -187,7 +185,7 @@ Stateless one-shot wrappers skip the agent process entirely:
 
 ExAgent.stream_with(:chat, "Explain OTP") |> Enum.each(&IO.write(&1.text || ""))
 
-{:ok, docs} = ExAgent.embed_with(:embed, chunks, task: :retrieval_document)
+{:ok, docs} = ExAgent.embed_with(:embed, chunks, task: :retrieval, args: [prompt_name: :document])
 ```
 
 **These do not run the tool loop** — it lives in the agent. A tool-configured provider
@@ -610,7 +608,8 @@ ExAgent.chat(agent, "Compare these", files: [
 
 ## Embeddings
 
-Stateless — takes a provider struct, no agent.
+Stateless — takes a provider struct, no agent. Task atoms below are Gemini's; see
+[Tasks belong to the provider](#tasks-belong-to-the-provider).
 
 ```elixir
 provider = ExAgent.Providers.Gemini.new(api_key: System.fetch_env!("GEMINI_API_KEY"))
@@ -644,49 +643,116 @@ end)
 
 That turns a later model change into a detectable migration instead of a quiet regression.
 
-### Tasks
+### Tasks belong to the provider
 
-`:task` says what the embedding is *for*. Query and document are deliberately distinct —
-asymmetric retrieval needs both, and the wrong one degrades recall invisibly.
-
-`:retrieval_query` · `:retrieval_document` · `:similarity` · `:classification` ·
-`:clustering` · `:question_answering` · `:fact_verification` · `:code_query`
-
-Providers express this incompatibly and ExAgent translates: `gemini-embedding-001` takes a
-`taskType` enum; `gemini-embedding-2` has no such field and writes a text prefix (with
-`:title` filling the document template); **OpenAI has no task support and errors** rather
-than dropping it; OpenAI-compatible endpoints take a `task` body field.
+`:task` says what the embedding is *for*, as an atom from **that provider's** vocabulary.
+There is no shared set, because there is no honest one: Gemini's `taskType` is a closed
+enum of eight, Jina v5 has four names plus a separate `prompt_name`, and OpenAI has no task
+field at all. A common vocabulary would have to drop distinctions a model makes or invent
+ones it does not.
 
 ```elixir
-ExAgent.embed(provider, [%{content: "body", title: "OTP Guide"}],
+ExAgent.embedding_tasks(gemini)   #=> [:retrieval_query, :retrieval_document, :similarity, ...]
+ExAgent.embedding_tasks(jina)     #=> [:retrieval, :text_matching, :clustering, :classification]
+ExAgent.embedding_tasks(openai)   #=> []
+```
+
+An unknown task is an error naming the accepted ones. Strings are rejected too — an
+endpoint that does not recognize a task string answers 200 and leaves quietly wrong vectors
+in your index, with no later signal.
+
+**Gemini** additionally has two model families: `gemini-embedding-001` takes the `taskType`
+enum, while `gemini-embedding-2` has no such field and writes a text prefix instead (with
+`:title` filling the document template). The family is inferred from the model name;
+`:embedding_family` overrides it for a model this release does not know.
+
+```elixir
+ExAgent.embed(gemini, [%{content: "body", title: "OTP Guide"}],
   model: "gemini-embedding-2", task: :retrieval_document)
 ```
 
-#### When the atom vocabulary does not fit
+**OpenAI** errors on any `:task` rather than dropping it silently.
 
-A self-hosted endpoint serves whatever model you deployed, and those vocabularies change
-between versions — Jina v3 has `"retrieval.passage"`, while v5 replaced it with a
-`"retrieval"` task plus a query/document prompt and added `"text-matching"`. So
-`OpenAICompatible` — and only it — accepts a raw string:
+### Jina v5
+
+An embeddings-only provider for a **self-hosted** v5 server. v5 splits what earlier
+versions fused: `task` says what kind of embedding, and `prompt_name` says which side of a
+retrieval pair.
 
 ```elixir
-# Keep the portable atom, retarget the strings for your model
-ExAgent.embed(jina, ["query"],
-  task: :retrieval_query,
-  task_map: %{retrieval_query: "retrieval.query", retrieval_document: "retrieval.passage"})
+jina = ExAgent.Providers.JinaV5.new(base_url: System.fetch_env!("JINA_URL"))
 
-# Or pass the model's own task — sent verbatim, no translation, no validation
-ExAgent.embed(jina, ["a"], task: "text-matching")
+{:ok, docs}  = ExAgent.embed(jina, chunks, task: :retrieval, args: [prompt_name: :document])
+{:ok, query} = ExAgent.embed(jina, "what supervises processes?",
+                             task: :retrieval, args: [prompt_name: :query])
 ```
 
-**Gemini and OpenAI take atoms only.** Gemini's `taskType` is a closed enum and OpenAI has
-no task field at all, so there a string is a typo far more often than a new value and is
-rejected naming the valid atoms. Model drift there is handled by `:embedding_family`
-instead.
+Behind Modal's proxy auth:
 
-An atom is always validated, so `:retreival_query` is rejected rather than quietly sent.
-Either way the result's `:task` carries back exactly what you passed, so stored provenance
-stays truthful.
+```elixir
+ExAgent.Providers.JinaV5.new(
+  base_url: System.fetch_env!("MODAL_JINA_URL"),
+  api_key: System.fetch_env!("MODAL_API_KEY"),
+  headers: [
+    {"Modal-Key", System.fetch_env!("MODAL_KEY")},
+    {"Modal-Secret", System.fetch_env!("MODAL_SECRET")}
+  ]
+)
+```
+
+`prompt_name` is **required** for `:retrieval` and rejected for the other three tasks —
+both rules are the server's, enforced here so the failure arrives before the round trip:
+
+```elixir
+ExAgent.embed(jina, chunks, task: :retrieval)
+#=> {:error, %ExAgent.Error{message: "task :retrieval needs args: [prompt_name: :query] " <>
+#=>          "for the search side or [prompt_name: :document] for the indexed side..."}}
+```
+
+Encoding both sides of a retrieval pair the same way is not an error anywhere — it just
+degrades recall invisibly, and the fix is a full re-embed. That is why there is no default.
+
+1024 dimensions, Matryoshka-truncatable to 32, 64, 128, 256, 512, or 768; an untrained
+width is refused. The server truncates *and* re-normalizes, so ExAgent does not touch the
+vectors — `args: [normalize: false]` gives you the raw truncated one, which is not unit
+length. Batches are capped at 512 inputs.
+
+#### The server contract
+
+Verified against a running deployment rather than inferred. `POST {base_url}/embed`:
+
+```json
+{"texts": ["..."], "task": "retrieval", "prompt_name": "document",
+ "dimensions": 256, "normalize": true}
+```
+
+```json
+{"model": "...", "task": "...", "prompt_name": "...",
+ "dimensions": 256, "input_count": 1, "embeddings": [[...]]}
+```
+
+The server rejects unknown body fields, which is why `:args` is a closed allowlist rather
+than a passthrough. This is **not** the shape of Jina's hosted `api.jina.ai` service, which
+speaks an OpenAI-style `/v1/embeddings`; pointing this provider there will not work.
+
+Note that `OpenAICompatible` has **no** embeddings support: "any endpoint" cannot have a
+task vocabulary, and the shared task map that used to fake one guessed wrong as soon as
+Jina renamed its tasks in v5.
+
+### Extra model arguments
+
+`:args` forwards key–value pairs into the request body for parameters this library does not
+model. Each provider validates them against its own endpoint, so a typo fails loudly
+instead of being ignored by the server:
+
+```elixir
+ExAgent.embed(jina, chunks, task: :retrieval, args: [prompt_name: :document])
+ExAgent.embed(openai, chunks, args: [encoding_format: "base64"])
+
+ExAgent.embed(jina, chunks, task: :clustering, args: [prompt_nane: :document])
+#=> {:error, %ExAgent.Error{message: "JinaV5 does not accept :prompt_nane in :args; " <>
+#=>          "it accepts [:prompt_name, :normalize]"}}
+```
 
 ### Models and dimensions
 
@@ -854,8 +920,11 @@ end
 ```elixir
 embedder = ExAgent.provider!(:embed)
 
-# Index: embed documents, persist provenance next to each vector
-{:ok, result} = ExAgent.embed(embedder, chunks, task: :retrieval_document)
+# Index: embed documents, persist provenance next to each vector.
+# Tasks are the provider's own — this is Jina v5's spelling; on Gemini the
+# equivalent is task: :retrieval_document with no :args.
+{:ok, result} =
+  ExAgent.embed(embedder, chunks, task: :retrieval, args: [prompt_name: :document])
 
 rows =
   Enum.zip(chunks, result.vectors)
@@ -865,8 +934,9 @@ rows =
 
 Repo.insert_all(Chunk, rows)
 
-# Query: the *query* task, not the document task
-{:ok, q} = ExAgent.embed(embedder, question, task: :retrieval_query)
+# Query: the *query* side, encoded differently. Using the document side here
+# returns 200 and degrades recall with no signal.
+{:ok, q} = ExAgent.embed(embedder, question, task: :retrieval, args: [prompt_name: :query])
 [qv] = q.vectors
 
 context =

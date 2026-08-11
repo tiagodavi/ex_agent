@@ -1,5 +1,73 @@
 ## v0.3.0 (unreleased)
 
+### Changed
+
+- **Embedding task vocabularies now belong to each provider.** There was a single
+  normalized set of eight atoms translated per provider, plus a `:task_map` to retarget the
+  strings and a verbatim-string escape hatch. That model does not survive contact with real
+  endpoints: Gemini's `taskType` is a closed enum of eight, Jina v5 has four task names plus
+  a separate `prompt_name`, and OpenAI has no task field at all. Translating between them
+  meant either dropping distinctions a model makes or inventing ones it does not — and the
+  built-in map was already wrong, mapping `:retrieval_document` to Jina v3's
+  `"retrieval.passage"`, which v5 removed.
+
+  Each provider now declares its own atoms and rejects anything outside them.
+  `ExAgent.embedding_tasks/1` lists them, backed by a new optional
+  `c:ExAgent.Provider.embedding_tasks/1` callback.
+
+  **Removed** from `ExAgent.Embeddings`: `tasks/0`, `valid_task?/1`, the `task_input` type,
+  the `:task_map` option, and verbatim string tasks. A string is now rejected everywhere — an endpoint that does not recognize a task
+  string answers 200 and leaves quietly wrong vectors in an index, so there is no safe
+  version of "send it and hope".
+
+  Gemini's own atoms are unchanged, so Gemini callers are unaffected.
+
+- **`ExAgent.Providers.OpenAICompatible` no longer supports embeddings.** "Any endpoint
+  speaking the OpenAI dialect" cannot have a task vocabulary, which is exactly what the
+  removed `:task_map` was trying to paper over. the `OpenAICompatibleEmbedService` module
+  is gone; the provider is chat-only. Use `ExAgent.Providers.JinaV5`, or a provider of your
+  own, for embeddings against a self-hosted model.
+
+### Added
+
+- **`ExAgent.Providers.JinaV5`** — an embeddings-only provider for a self-hosted Jina
+  embeddings v5 server, with v5's own tasks: `:retrieval`, `:text_matching`, `:clustering`,
+  `:classification`. v5 moved the query/document distinction *out* of the task and into a
+  separate `prompt_name`, which is why the module is named for the version: v3 and v4
+  spelled the same thing as a single `"retrieval.query"` / `"retrieval.passage"` task, so
+  one module covering both would have to lie about one of them.
+
+  `prompt_name` is required for `:retrieval` and rejected for the other tasks; Matryoshka
+  truncation is validated against the trained widths (32, 64, 128, 256, 512, 768, 1024);
+  batches are capped at 512 inputs. All three are rules the server enforces, checked
+  client-side so the failure names the fix instead of arriving as a 400. The server owns
+  normalization, so vectors are returned untouched — `args: [normalize: false]` really does
+  give you a non-unit vector.
+
+  `chat/3` returns `{:error, %ExAgent.Error{type: :unsupported}}` pointing at a chat
+  provider. `:base_url` is required and takes bearer auth plus arbitrary `:headers`, so
+  Modal's proxy auth works.
+
+  The wire contract — `POST {base_url}/embed` with `texts`/`task`/`prompt_name`/
+  `dimensions`/`normalize`, answering `embeddings` — was verified against a live deployment,
+  not inferred from a model card. It is **not** the shape of Jina's hosted `api.jina.ai`
+  service, which speaks an OpenAI-style `/v1/embeddings`.
+
+- **`:args` on `embed/3`** — extra request-body parameters as a keyword list or map, for
+  what this library does not model:
+
+      ExAgent.embed(jina, chunks, task: :retrieval, args: [prompt_name: :document])
+      ExAgent.embed(openai, chunks, args: [encoding_format: "base64"])
+
+  Each provider validates keys **and** values against what its own endpoint accepts and
+  rejects the rest, so `prompt_nane:` fails naming the accepted keys instead of being
+  ignored by the server. Atoms are accepted where the endpoint wants one of a fixed set of
+  strings. Gemini accepts no extra args and says so; OpenAI accepts `encoding_format` and
+  `user`; Jina v5 accepts `prompt_name` and `normalize`, the only extra fields its server
+  permits.
+
+- `ExAgent.Embeddings.normalize_args/1`, for providers implementing the same option.
+
 ### Fixed
 
 An end-to-end audit of the library found the following. Every one of them shipped with a

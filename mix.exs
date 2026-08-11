@@ -39,6 +39,7 @@ defmodule ExAgent.MixProject do
           ExAgent.Providers.OpenAI,
           ExAgent.Providers.Gemini,
           ExAgent.Providers.OpenAICompatible,
+          ExAgent.Providers.JinaV5,
           ExAgent.Roles
         ],
         Conversations: [

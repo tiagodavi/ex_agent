@@ -110,7 +110,23 @@ defmodule ExAgent.Provider do
   @callback embed(provider :: struct(), [ExAgent.Embeddings.input()], keyword()) ::
               {:ok, ExAgent.Embeddings.t()} | {:error, ExAgent.Error.t()}
 
-  @optional_callbacks upload: 4, stream: 3, supported_modalities: 1, embed: 3
+  @doc """
+  Returns the embedding task atoms this provider accepts.
+
+  Optional — providers with no task field return `[]`.
+
+  There is no shared vocabulary: Gemini's `taskType` is a closed enum of eight
+  values, Jina v5 has four names plus a separate `prompt_name`, and OpenAI has no
+  task at all. A provider that translated a common set into its own would have to
+  either drop distinctions its model makes or invent ones it does not.
+  """
+  @callback embedding_tasks(provider :: struct()) :: [ExAgent.Embeddings.task()]
+
+  @optional_callbacks upload: 4,
+                      stream: 3,
+                      supported_modalities: 1,
+                      embed: 3,
+                      embedding_tasks: 1
 
   @doc """
   Returns the attachment modalities the provider accepts.
@@ -196,6 +212,16 @@ defmodule ExAgent.Provider do
     else
       raise ExAgent.Error.new(:unsupported, "#{inspect(mod)} does not support streaming", mod)
     end
+  end
+
+  @doc """
+  Returns the embedding task atoms `provider` accepts, or `[]` if it has none.
+  """
+  @spec embedding_tasks(struct()) :: [ExAgent.Embeddings.task()]
+  def embedding_tasks(provider) do
+    mod = provider.__struct__
+
+    if function_exported?(mod, :embedding_tasks, 1), do: mod.embedding_tasks(provider), else: []
   end
 
   @doc """

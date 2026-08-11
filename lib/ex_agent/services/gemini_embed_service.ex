@@ -17,10 +17,20 @@ defmodule ExAgent.Services.GeminiEmbedService do
   """
 
   alias ExAgent.Providers.Gemini
+  alias ExAgent.Services.EmbedArgs
   alias ExAgent.{Embeddings, Error}
 
   @default_model "gemini-embedding-001"
   @full_dimensions 3072
+
+  # Gemini's `taskType` enum, as atoms. This is Gemini's vocabulary, not a shared
+  # one — Jina v5 and OpenAI have nothing resembling it.
+  @tasks ~w(retrieval_query retrieval_document similarity classification
+            clustering question_answering fact_verification code_query)a
+
+  # `taskType` and `outputDimensionality` are modelled as :task and :dimensions;
+  # `title` comes from a map input. That leaves nothing to forward.
+  @allowed_args []
 
   @task_types %{
     retrieval_query: "RETRIEVAL_QUERY",
@@ -46,16 +56,25 @@ defmodule ExAgent.Services.GeminiEmbedService do
   }
 
   @doc """
+  Returns the task atoms this service accepts.
+  """
+  @spec tasks() :: [Embeddings.task()]
+  def tasks, do: @tasks
+
+  @doc """
   Generates embeddings for `inputs`.
 
   ## Options
 
   - `:model` - defaults to `#{inspect(@default_model)}`. Never the provider's chat model.
   - `:dimensions` - sets `outputDimensionality`
-  - `:task` - one of `ExAgent.Embeddings.tasks/0`
+  - `:task` - one of `#{inspect(@tasks)}`
   - `:embedding_family` - `:task_type` or `:prefix`, to use a model this library
     does not know yet
+  - `:args` - Gemini exposes nothing beyond the above, so any key here is
+    rejected rather than silently ignored by the API
   """
+
   @spec embed(Gemini.t(), [Embeddings.input()], keyword()) ::
           {:ok, Embeddings.t()} | {:error, Error.t()}
   def embed(%Gemini{} = provider, inputs, opts \\ []) do
@@ -64,7 +83,8 @@ defmodule ExAgent.Services.GeminiEmbedService do
     dimensions = opts[:dimensions]
 
     with {:ok, family} <- family(model, opts[:embedding_family]),
-         :ok <- validate_task(task),
+         :ok <- EmbedArgs.validate_task(task, @tasks, Gemini),
+         {:ok, _args} <- EmbedArgs.validate_args(opts[:args], @allowed_args, Gemini),
          {:ok, normalized} <- normalize_inputs(inputs) do
       body = %{
         "requests" => Enum.map(normalized, &build_request(family, &1, model, task, dimensions))
@@ -104,35 +124,6 @@ defmodule ExAgent.Services.GeminiEmbedService do
          "does not know about",
        Gemini
      )}
-  end
-
-  @spec validate_task(Embeddings.task_input() | nil) :: :ok | {:error, Error.t()}
-  defp validate_task(nil), do: :ok
-
-  # Gemini's taskType is a closed enum, so a raw string is a typo far more often
-  # than a new value — and `:embedding_family` already covers model drift.
-  defp validate_task(task) when is_binary(task) do
-    {:error,
-     Error.new(
-       :invalid_request,
-       "Gemini takes a normalized task atom, not the string #{inspect(task)}; " <>
-         "expected one of #{inspect(Embeddings.tasks())}. Verbatim task strings are " <>
-         "an OpenAI-compatible-endpoint feature, where the vocabulary is model-specific",
-       Gemini
-     )}
-  end
-
-  defp validate_task(task) do
-    if Embeddings.valid_task?(task) do
-      :ok
-    else
-      {:error,
-       Error.new(
-         :invalid_request,
-         "unknown task #{inspect(task)}; expected one of #{inspect(Embeddings.tasks())}",
-         Gemini
-       )}
-    end
   end
 
   @spec normalize_inputs([Embeddings.input()]) ::

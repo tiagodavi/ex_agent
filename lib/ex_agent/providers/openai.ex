@@ -126,4 +126,7 @@ defmodule ExAgent.Providers.OpenAI do
   def embed(provider, inputs, opts \\ []) do
     ExAgent.Services.OpenAIEmbedService.embed(provider, inputs, opts)
   end
+
+  @impl true
+  def embedding_tasks(_provider), do: ExAgent.Services.OpenAIEmbedService.tasks()
 end

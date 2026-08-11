@@ -6,7 +6,7 @@ defmodule ExAgent.EmbedServiceTest do
   use ExUnit.Case, async: true
 
   alias ExAgent.{Embeddings, Error}
-  alias ExAgent.Providers.{Gemini, OpenAI, OpenAICompatible}
+  alias ExAgent.Providers.{Gemini, JinaV5, OpenAI}
   alias ExAgent.Test.MinimalProvider
 
   # Records the request body, then answers with `vectors`.
@@ -30,11 +30,30 @@ defmodule ExAgent.EmbedServiceTest do
         OpenAI ->
           %OpenAI{api_key: "sk-test", model: "gpt-4o", base_url: "https://api.openai.com/v1"}
 
-        OpenAICompatible ->
-          %OpenAICompatible{base_url: "https://jina.test/v1", model: "jina-embeddings-v3"}
+        JinaV5 ->
+          %JinaV5{api_key: "jina-test", base_url: "https://jina.test"}
       end
 
     struct!(base, Keyword.merge([req: Req.new(plug: plug)], extra))
+  end
+
+  # The v5 server has its own body and response shape — `texts` in, `embeddings`
+  # out, at /embed — so it needs its own stub rather than the OpenAI-style one.
+  defp jina_provider(vectors) do
+    test_pid = self()
+
+    plug = fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:request, conn.request_path, Jason.decode!(body)})
+
+      Req.Test.json(conn, %{
+        "model" => "jina-embeddings-v5-text-small",
+        "input_count" => length(vectors),
+        "embeddings" => vectors
+      })
+    end
+
+    %JinaV5{api_key: "jina-test", base_url: "https://jina.test", req: Req.new(plug: plug)}
   end
 
   defp gemini_provider(vectors) do
@@ -396,93 +415,131 @@ defmodule ExAgent.EmbedServiceTest do
     end
   end
 
-  describe "OpenAI-compatible embeddings" do
-    test "given a task, then it is translated to the endpoint's task string" do
-      provider = openai_style_provider(OpenAICompatible, [[0.1]])
+  # v5 splits what v3 fused: `task` says what kind of embedding, `prompt_name` says
+  # which side of a retrieval pair. Both are v5's own vocabulary, so both are
+  # validated here rather than translated from an invented shared set.
+  describe "JinaV5 embeddings" do
+    test "given a task, then v5's own spelling is sent to /embed" do
+      provider = jina_provider([[0.1]])
 
-      assert {:ok, _} = ExAgent.embed(provider, ["a"], task: :retrieval_query)
+      assert {:ok, _} = ExAgent.embed(provider, ["a"], task: :text_matching)
 
-      assert sent().body["task"] == "retrieval.query"
+      sent = sent()
+      assert sent.path == "/embed"
+      assert sent.body["task"] == "text-matching"
+      assert sent.body["texts"] == ["a"]
     end
 
-    test "given a document task, then it maps to the passage string" do
-      provider = openai_style_provider(OpenAICompatible, [[0.1]])
-
-      assert {:ok, _} = ExAgent.embed(provider, ["a"], task: :retrieval_document)
-
-      assert sent().body["task"] == "retrieval.passage"
-    end
-
-    test "given a task_map, then it overrides the default translation" do
-      provider = openai_style_provider(OpenAICompatible, [[0.1]])
+    test "given a retrieval task and a prompt_name, then both reach the body" do
+      provider = jina_provider([[0.1]])
 
       assert {:ok, _} =
-               ExAgent.embed(provider, ["a"],
-                 task: :retrieval_query,
-                 task_map: %{retrieval_query: "query"}
-               )
+               ExAgent.embed(provider, ["a"], task: :retrieval, args: [prompt_name: :document])
 
-      assert sent().body["task"] == "query"
+      body = sent().body
+      assert body["task"] == "retrieval"
+      assert body["prompt_name"] == "document"
     end
 
-    test "given dimensions, then they are sent as a body field" do
-      provider = openai_style_provider(OpenAICompatible, [[0.1]])
+    # The server defaults to retrieval, which then demands a prompt_name; making
+    # the default explicit is what lets that rule be checked before the request.
+    test "given no task, then retrieval is assumed and a prompt_name is required" do
+      provider = jina_provider([[0.1]])
 
-      assert {:ok, _} = ExAgent.embed(provider, ["a"], dimensions: 512)
+      assert {:error, %Error{type: :invalid_request} = error} = ExAgent.embed(provider, ["a"])
 
-      assert sent().body["dimensions"] == 512
+      assert error.message =~ "task :retrieval needs args: [prompt_name:"
+      refute_received {:request, _path, _body}
     end
 
-    test "given no task, then no task field is sent" do
-      provider = openai_style_provider(OpenAICompatible, [[0.1]])
+    test "given a response, then the server's reported model is recorded" do
+      provider = jina_provider([[0.1]])
 
-      assert {:ok, _} = ExAgent.embed(provider, ["a"])
+      assert {:ok, result} = ExAgent.embed(provider, ["a"], task: :clustering)
 
-      refute Map.has_key?(sent().body, "task")
+      # The model is the server's to name; the body never carries one.
+      refute Map.has_key?(sent().body, "model")
+      assert result.model == "jina-embeddings-v5-text-small"
     end
 
-    test "given the provider model, then it is used by default" do
-      provider = openai_style_provider(OpenAICompatible, [[0.1]])
+    # The server truncates *and* re-normalizes, and honours `normalize: false`.
+    # Re-normalizing client-side would silently undo that choice.
+    test "given a Matryoshka dimension, then it is sent and the vectors left alone" do
+      provider = jina_provider([[3.0, 4.0]])
 
-      assert {:ok, result} = ExAgent.embed(provider, ["a"])
+      assert {:ok, result} =
+               ExAgent.embed(provider, ["a"], task: :clustering, dimensions: 256)
 
-      assert sent().body["model"] == "jina-embeddings-v3"
-      assert result.model == "jina-embeddings-v3"
+      assert sent().body["dimensions"] == 256
+      assert result.vectors == [[3.0, 4.0]]
+      assert result.dimensions == 256
+    end
+
+    test "given more inputs than the server accepts, then the cap is named up front" do
+      provider = jina_provider([[0.1]])
+
+      assert {:error, %Error{type: :invalid_request} = error} =
+               ExAgent.embed(provider, Enum.map(1..513, &"chunk #{&1}"), task: :clustering)
+
+      assert error.message =~ "at most 512 inputs"
+      refute_received {:request, _path, _body}
+    end
+
+    test "given a prompt_name on a non-retrieval task, then it is refused" do
+      provider = jina_provider([[0.1]])
+
+      assert {:error, %Error{type: :invalid_request} = error} =
+               ExAgent.embed(provider, ["a"], task: :clustering, args: [prompt_name: :query])
+
+      assert error.message =~ "applies only to task :retrieval"
+      refute_received {:request, _path, _body}
+    end
+
+    test "given an untrained dimension, then it is rejected before the request" do
+      provider = jina_provider([[0.1]])
+
+      assert {:error, %Error{type: :invalid_request} = error} =
+               ExAgent.embed(provider, ["a"], task: :clustering, dimensions: 300)
+
+      assert error.message =~ "trained for"
+      refute_received {:request, _path, _body}
+    end
+
+    test "given a task from another provider's vocabulary, then it is rejected" do
+      provider = jina_provider([[0.1]])
+
+      assert {:error, %Error{type: :invalid_request} = error} =
+               ExAgent.embed(provider, ["a"], task: :retrieval_document)
+
+      assert error.message =~ "unknown task :retrieval_document"
+      assert error.message =~ ":text_matching"
+      refute_received {:request, _path, _body}
+    end
+
+    test "given chat, then it says it is an embeddings model" do
+      assert {:error, %Error{type: :unsupported} = error} =
+               ExAgent.Provider.chat(jina_provider([]), [])
+
+      assert error.message =~ "embeddings model"
+    end
+
+    test "given embedding_tasks/1, then v5's four tasks come back" do
+      assert ExAgent.embedding_tasks(jina_provider([])) ==
+               [:retrieval, :text_matching, :clustering, :classification]
     end
   end
 
-  # Compatible endpoints serve arbitrary models with arbitrary task vocabularies
-  # that change between versions — Jina v3 has "retrieval.passage", v5 replaced it
-  # with "retrieval" plus a prompt and added "text-matching". Only there is a raw
-  # string accepted; Gemini's taskType is a closed enum and OpenAI has no task
-  # field, so both stay validated.
-  describe "verbatim string tasks" do
-    test "given a string task on a compatible endpoint, then it is sent unchanged" do
-      provider = openai_style_provider(OpenAICompatible, [[0.1]])
+  # A task string would be forwarded verbatim and accepted with a 200 by an
+  # endpoint that does not recognize it, leaving quietly wrong vectors in an index.
+  describe "task vocabularies are per provider" do
+    test "given a string task on Jina, then it is rejected in favour of the atoms" do
+      provider = jina_provider([[0.1]])
 
-      assert {:ok, _} = ExAgent.embed(provider, ["a"], task: "text-matching")
+      assert {:error, %Error{type: :invalid_request} = error} =
+               ExAgent.embed(provider, ["a"], task: "text-matching")
 
-      assert sent().body["task"] == "text-matching"
-    end
-
-    test "given a string task, then no :task_map is consulted" do
-      provider = openai_style_provider(OpenAICompatible, [[0.1]])
-
-      assert {:ok, _} =
-               ExAgent.embed(provider, ["a"],
-                 task: "separation",
-                 task_map: %{retrieval_query: "ignored"}
-               )
-
-      assert sent().body["task"] == "separation"
-    end
-
-    test "given a string task, then the result carries it back verbatim" do
-      provider = openai_style_provider(OpenAICompatible, [[0.1]])
-
-      assert {:ok, result} = ExAgent.embed(provider, ["a"], task: "text-matching")
-
-      assert result.task == "text-matching"
+      assert error.message =~ "must be an atom"
+      assert error.message =~ ":text_matching"
     end
 
     test "given a string task on Gemini, then it is rejected and points to the atoms" do
@@ -491,33 +548,116 @@ defmodule ExAgent.EmbedServiceTest do
       assert {:error, %Error{type: :invalid_request} = error} =
                ExAgent.embed(provider, ["a"], task: "NEW_ENUM_VALUE")
 
-      assert error.message =~ "normalized task atom"
+      assert error.message =~ "must be an atom"
       assert error.message =~ "retrieval_query"
     end
 
-    test "given a string task on the Gemini prefix family, then it is rejected too" do
+    test "given a Jina task on Gemini, then it is rejected" do
       provider = gemini_provider([[0.1, 0.2]])
 
-      assert {:error, %Error{type: :invalid_request}} =
-               ExAgent.embed(provider, ["hello"],
-                 model: "gemini-embedding-2",
-                 task: "custom instruction"
-               )
+      assert {:error, %Error{type: :invalid_request} = error} =
+               ExAgent.embed(provider, ["a"], task: :text_matching)
+
+      assert error.message =~ "unknown task :text_matching"
     end
 
-    test "given an unknown atom task, then it is still rejected" do
-      # Strings opt out of validation; atoms do not, so a typo stays loud.
-      provider = openai_style_provider(OpenAICompatible, [[0.1]])
-
-      assert {:error, %Error{type: :unsupported}} =
-               ExAgent.embed(provider, ["a"], task: :retreival_query)
-    end
-
-    test "given a string task on OpenAI, then it is still unsupported" do
+    test "given any task on OpenAI, then it is unsupported" do
       provider = openai_style_provider(OpenAI, [[0.1]])
 
       assert {:error, %Error{type: :unsupported}} =
-               ExAgent.embed(provider, ["a"], task: "text-matching")
+               ExAgent.embed(provider, ["a"], task: :retrieval_query)
+    end
+
+    test "given embedding_tasks/1, then each provider reports its own set" do
+      assert ExAgent.embedding_tasks(gemini_provider([])) |> Enum.sort() ==
+               Enum.sort([
+                 :retrieval_query,
+                 :retrieval_document,
+                 :similarity,
+                 :classification,
+                 :clustering,
+                 :question_answering,
+                 :fact_verification,
+                 :code_query
+               ])
+
+      assert ExAgent.embedding_tasks(openai_style_provider(OpenAI, [])) == []
+      assert ExAgent.embedding_tasks(MinimalProvider.new()) == []
+    end
+  end
+
+  describe ":args passthrough" do
+    test "given an allowed arg, then it is forwarded verbatim" do
+      provider = jina_provider([[0.1]])
+
+      assert {:ok, _} =
+               ExAgent.embed(provider, ["a"], task: :clustering, args: [normalize: false])
+
+      assert sent().body["normalize"] == false
+    end
+
+    test "given args as a map, then it works the same" do
+      provider = jina_provider([[0.1]])
+
+      assert {:ok, _} = ExAgent.embed(provider, ["a"], args: %{prompt_name: "query"})
+
+      assert sent().body["prompt_name"] == "query"
+    end
+
+    test "given an atom prompt_name, then it reaches the wire as a string" do
+      provider = jina_provider([[0.1]])
+
+      assert {:ok, _} =
+               ExAgent.embed(provider, ["a"], task: :retrieval, args: [prompt_name: :document])
+
+      assert sent().body["prompt_name"] == "document"
+    end
+
+    test "given an unknown arg, then the error lists what the provider accepts" do
+      provider = jina_provider([[0.1]])
+
+      assert {:error, %Error{type: :invalid_request} = error} =
+               ExAgent.embed(provider, ["a"], task: :clustering, args: [prompt_nane: "document"])
+
+      assert error.message =~ "does not accept :prompt_nane"
+      assert error.message =~ ":prompt_name"
+      refute_received {:request, _path, _body}
+    end
+
+    test "given an invalid value for a known arg, then it names the allowed values" do
+      provider = jina_provider([[0.1]])
+
+      assert {:error, %Error{type: :invalid_request} = error} =
+               ExAgent.embed(provider, ["a"], task: :retrieval, args: [prompt_name: :passage])
+
+      assert error.message =~ "invalid value :passage"
+      assert error.message =~ "\"document\""
+    end
+
+    test "given args on a provider that accepts none, then it says so" do
+      provider = gemini_provider([[0.1, 0.2]])
+
+      assert {:error, %Error{type: :invalid_request} = error} =
+               ExAgent.embed(provider, ["a"], args: [title: "doc"])
+
+      assert error.message =~ "accepts no extra :args"
+    end
+
+    test "given OpenAI's own args, then they are forwarded" do
+      provider = openai_style_provider(OpenAI, [[0.1]])
+
+      assert {:ok, _} = ExAgent.embed(provider, ["a"], args: [encoding_format: "float"])
+
+      assert sent().body["encoding_format"] == "float"
+    end
+
+    test "given args in the wrong shape, then it is rejected" do
+      provider = jina_provider([[0.1]])
+
+      assert {:error, %Error{type: :invalid_request} = error} =
+               ExAgent.embed(provider, ["a"], task: :clustering, args: "prompt_name=query")
+
+      assert error.message =~ "keyword list or a map"
     end
   end
 
