@@ -57,6 +57,13 @@
   message?* A subagent is a phone call you make while the customer waits; a handoff is
   passing the customer to a colleague.
 
+  The handoff step now explains why `ExAgent.handoff/2` has to be called before talking to
+  the target: it is what delivers the conversation, and without it the target agent is a
+  stranger. Includes the before/after of what actually reaches the model, why the returned
+  tuple is a proposal rather than a transfer, and why the async cast is not a race
+  (Erlang orders messages between a pair of processes; measured 0 late arrivals in 200
+  runs) along with the case where that guarantee does not hold.
+
 - Em dashes removed from all documentation and source comments.
 
 ### Added

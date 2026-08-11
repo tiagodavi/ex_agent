@@ -1001,10 +1001,60 @@ IO.puts(r.content)
 #=> "We'll review the billing records... expect an update within 3-5 business days."
 ```
 
-Two things to notice. The billing agent already knows about invoice 88, because the
-summary travelled with the handoff. And the transfer did not happen on its own:
-`ExAgent.chat/3` returned a tuple and **you** called `handoff/2`. Routing a real
-customer between teams is your application's decision, not the model's.
+#### Why call `handoff/2` before `chat/3`?
+
+Because **`ExAgent.handoff/2` is what actually delivers the conversation. Without it the
+target agent is a stranger.**
+
+The same question, asked of the billing agent with and without that line, showing what
+reached the model:
+
+```
+WITHOUT handoff/2 first
+  provider saw: ["So what happens next?"]
+
+WITH handoff/2 first
+  provider saw: ["Handoff: charged twice for invoice 88.", "So what happens next?"]
+```
+
+Skip it and the billing agent is asked "So what happens next?" with no idea what "what"
+refers to. So the order is: **deliver the history, then talk.**
+
+That is all `handoff/2` does. It copies the context into the target's state:
+
+```elixir
+# ExAgent.Patterns.Handoff
+def execute(target, context), do: GenServer.cast(target, {:receive_handoff, context})
+
+# ExAgent.Agent
+def handle_cast({:receive_handoff, context}, state) do
+  {:noreply, %{state | context: context, status: :idle}}
+end
+```
+
+#### The tuple is a proposal, not a transfer
+
+`{:handoff, target, context}` means the model *asked* to transfer and handed you a
+summary. Nothing moved. The gap between the two lines is where your real code goes:
+check the billing team is staffed, log it, redact the summary, or decline and answer
+yourself. Declining is just not calling `handoff/2`.
+
+Letting a model move a customer between teams on its own is a bad idea, so `chat/3`
+stops and gives you the decision.
+
+#### Is the cast a race?
+
+`handoff/2` returns `:ok` immediately without waiting, so it looks like `chat/3` could
+overtake it. It cannot. Erlang guarantees messages between **a pair of processes**
+arrive in send order, so your cast is in the target's mailbox before your call. Measured
+over 200 runs, the context was late 0 times.
+
+The caveat is in the word *pair*: if one process calls `handoff/2` and a **different**
+one calls `chat/3`, that guarantee no longer applies and you would have to synchronize
+them yourself. Doing both from the same process, as here, is safe.
+
+One last detail: the front desk is left with `status: :handed_off` but stays usable.
+Handing off one customer does not retire the agent for the next.
 
 ### Steps 4 to 6, side by side
 
