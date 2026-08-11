@@ -6,7 +6,7 @@ defmodule ExAgent.Source do
   the coarse modality providers gate on.
 
   This module knows nothing about providers and makes no decisions about how an
-  attachment is delivered (inline, uploaded, or referenced by URL) — that is the
+  attachment is delivered (inline, uploaded, or referenced by URL) - that is the
   responsibility of each provider's service module.
   """
 

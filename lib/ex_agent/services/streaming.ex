@@ -9,7 +9,7 @@ defmodule ExAgent.Services.Streaming do
 
   Nothing here raises. A non-200 response, a transport failure, or an idle
   timeout all terminate the stream with a `:done` chunk carrying an
-  `ExAgent.Error` — whatever was already emitted stays valid.
+  `ExAgent.Error` - whatever was already emitted stays valid.
   """
 
   alias ExAgent.{Chunk, Error, SSE}
@@ -60,7 +60,7 @@ defmodule ExAgent.Services.Streaming do
 
   # Selective receive on this response's ref. A bare `receive message ->` would
   # match *anything* in the mailbox, and `Req.parse_message/2` answering
-  # `:unknown` discards it — so streaming inside a LiveView or GenServer would
+  # `:unknown` discards it - so streaming inside a LiveView or GenServer would
   # silently eat that process's own messages. Both shapes are matched because an
   # adapter may tag its messages before the ref.
   defp next(%{ref: ref} = state, mapper) do
@@ -85,7 +85,7 @@ defmodule ExAgent.Services.Streaming do
         state = %{state | buffer: rest, finish_reason: last_finish(mapped, state)}
 
         # A mapper turns a finish-reason frame into its own `:done`, but the
-        # single terminal chunk is this module's to emit — the reason has
+        # single terminal chunk is this module's to emit - the reason has
         # already been captured above. Keeping both would end every real
         # stream with two `:done` chunks.
         chunks = Enum.reject(mapped, &(&1.type == :done))

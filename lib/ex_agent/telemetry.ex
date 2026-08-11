@@ -4,7 +4,7 @@ defmodule ExAgent.Telemetry do
 
   A library whose job is calling billed APIs has to be measurable: latency,
   token spend, failure rate, and tool-loop depth are operational facts, not
-  debugging trivia. Attaching a handler is the supported way to get them —
+  debugging trivia. Attaching a handler is the supported way to get them -
   nothing here logs on your behalf.
 
   ## Events

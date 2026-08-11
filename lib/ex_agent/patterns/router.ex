@@ -34,8 +34,8 @@ defmodule ExAgent.Patterns.Router do
   - `:synthesizer` - function `(input, results) -> combined_string` (default: joins with headers)
   - `:timeout` - milliseconds to wait for each agent (default: 30_000)
   """
-  @spec route(String.t(), router_opts()) :: {:ok, String.t()} | {:error, term()}
-  def route(input, opts) do
+  @spec run(String.t(), router_opts()) :: {:ok, String.t()} | {:error, term()}
+  def run(input, opts) do
     routes = Keyword.fetch!(opts, :routes)
     synthesizer = Keyword.get(opts, :synthesizer, &default_synthesizer/2)
     timeout = Keyword.get(opts, :timeout, 30_000)
@@ -82,7 +82,7 @@ defmodule ExAgent.Patterns.Router do
       timeout: timeout,
       on_timeout: :kill_task,
       # Without this an exit carries no route name, and one crashed agent used
-      # to raise a CaseClauseError in the caller — taking down the routes that
+      # to raise a CaseClauseError in the caller - taking down the routes that
       # had already answered.
       zip_input_on_exit: true
     )

@@ -86,7 +86,7 @@ defmodule ExAgent.Patterns.RouterTest do
         %{name: "code", agent: self(), match_fn: &String.contains?(&1, "code")}
       ]
 
-      assert {:error, :no_matching_routes} = Router.route("hello", routes: routes)
+      assert {:error, :no_matching_routes} = Router.run("hello", routes: routes)
     end
   end
 
@@ -99,7 +99,7 @@ defmodule ExAgent.Patterns.RouterTest do
         %{name: "coder", agent: agent_pid, match_fn: &String.contains?(&1, "code")}
       ]
 
-      assert {:ok, result} = Router.route("review this code", routes: routes)
+      assert {:ok, result} = Router.run("review this code", routes: routes)
       assert String.contains?(result, "Code review result")
       assert String.contains?(result, "## coder")
     end
@@ -113,7 +113,7 @@ defmodule ExAgent.Patterns.RouterTest do
         %{name: "writer", agent: writer_pid, match_fn: fn _ -> true end}
       ]
 
-      assert {:ok, result} = Router.route("analyze this", routes: routes)
+      assert {:ok, result} = Router.run("analyze this", routes: routes)
       assert String.contains?(result, "Code analysis")
       assert String.contains?(result, "Writing analysis")
     end
@@ -130,7 +130,7 @@ defmodule ExAgent.Patterns.RouterTest do
       ]
 
       assert {:ok, "test: Agent response"} =
-               Router.route("query", routes: routes, synthesizer: synthesizer)
+               Router.run("query", routes: routes, synthesizer: synthesizer)
     end
   end
 

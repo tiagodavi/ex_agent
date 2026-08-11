@@ -13,7 +13,7 @@ defmodule ExAgent.Providers.Gemini do
 
   @behaviour ExAgent.Provider
 
-  # See `ExAgent.Providers.OpenAI` — the credential must not reach a crash dump.
+  # See `ExAgent.Providers.OpenAI` - the credential must not reach a crash dump.
   @derive {Inspect, except: [:api_key, :req]}
 
   @type t :: %__MODULE__{

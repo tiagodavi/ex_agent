@@ -186,7 +186,7 @@ defmodule ExAgent.Services.JinaRerankerService do
     }
   end
 
-  # `document` is an object, not a string — the multimodal shape leaves room for
+  # `document` is an object, not a string - the multimodal shape leaves room for
   # an image alongside the text.
   @spec document_text(term()) :: String.t() | nil
   defp document_text(%{"text" => text}) when is_binary(text), do: text

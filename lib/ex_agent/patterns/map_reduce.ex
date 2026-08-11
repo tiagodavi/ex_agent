@@ -6,7 +6,7 @@ defmodule ExAgent.Patterns.MapReduce do
   summarise it, then someone stitches the summaries into one. Nobody reads the
   whole thing.
 
-  Use it when the input does not fit — or fits but answers worse whole than in
+  Use it when the input does not fit - or fits but answers worse whole than in
   parts. A 300-page contract, a week of logs, forty customer interviews.
 
       alias ExAgent.Patterns.MapReduce
@@ -38,12 +38,12 @@ defmodule ExAgent.Patterns.MapReduce do
 
   One section failing does not fail the run. The reduce step receives only the
   sections that succeeded, and `:failures` on the result tells you what was
-  missing — a summary built from 38 of 40 interviews is usually still worth having,
+  missing - a summary built from 38 of 40 interviews is usually still worth having,
   but never worth mistaking for all 40.
 
   ## When not to use it
 
-  If the pieces need to know about each other, this is the wrong shape — chain them
+  If the pieces need to know about each other, this is the wrong shape - chain them
   with `ExAgent.Patterns.Chain` so each sees the last. If you are sending the
   *same* input to several models rather than different inputs to one, you want
   `ExAgent.Patterns.Consensus`.
@@ -88,7 +88,7 @@ defmodule ExAgent.Patterns.MapReduce do
     `{target, (outputs -> prompt)}` to have a model combine them
   - `:timeout` - per section, in milliseconds (default: 5 minutes)
   - `:max_concurrency` - parallel sections (default: `System.schedulers_online/0`,
-    which is a poor proxy for how many requests a provider will tolerate — lower
+    which is a poor proxy for how many requests a provider will tolerate - lower
     it if you are being rate limited)
 
   Returns `{:ok, result}`, or `{:error, :all_sections_failed}` when nothing

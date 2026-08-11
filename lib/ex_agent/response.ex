@@ -14,7 +14,7 @@ defmodule ExAgent.Response do
   `:content` is a shortcut for `response.message.content`.
 
   `:thinking` carries a reasoning trace when the model emitted one. It is
-  deliberately kept out of `:message` — reasoning is not conversation history,
+  deliberately kept out of `:message` - reasoning is not conversation history,
   and replaying it corrupts the next turn.
   """
 

@@ -1,6 +1,6 @@
 defmodule ExAgent.Providers.JinaV5 do
   @moduledoc """
-  Jina embeddings v5 — an **embeddings-only** provider for a self-hosted server.
+  Jina embeddings v5 - an **embeddings-only** provider for a self-hosted server.
 
       provider = ExAgent.Providers.JinaV5.new(base_url: System.fetch_env!("JINA_URL"))
 
@@ -34,7 +34,7 @@ defmodule ExAgent.Providers.JinaV5 do
 
   | Task | `prompt_name` |
   |------|---------------|
-  | `:retrieval` | **required** — `:query` for the search side, `:document` for the indexed side |
+  | `:retrieval` | **required** - `:query` for the search side, `:document` for the indexed side |
   | `:text_matching` | rejected |
   | `:clustering` | rejected |
   | `:classification` | rejected |
@@ -47,7 +47,7 @@ defmodule ExAgent.Providers.JinaV5 do
   >
   > Asymmetric retrieval needs it. Embedding your documents *and* your queries
   > with the same `prompt_name` degrades recall invisibly, and the fix is a full
-  > re-embed — so `:retrieval` without a `prompt_name` is an error here rather
+  > re-embed - so `:retrieval` without a `prompt_name` is an error here rather
   > than a default.
 
   ## Dimensions

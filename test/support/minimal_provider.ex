@@ -2,9 +2,9 @@ defmodule ExAgent.Test.MinimalProvider do
   @moduledoc """
   A provider implementing only the required `chat/3` callback.
 
-  Exists so the dispatcher's fallbacks stay covered — the `[:text]` modality
+  Exists so the dispatcher's fallbacks stay covered - the `[:text]` modality
   default and the `:unsupported` errors for `upload/4`, `stream/3` and `embed/3`
-  — without depending on a shipped provider that happens to omit them today.
+  - without depending on a shipped provider that happens to omit them today.
   """
 
   @behaviour ExAgent.Provider

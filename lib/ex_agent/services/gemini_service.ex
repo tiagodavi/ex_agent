@@ -429,7 +429,7 @@ defmodule ExAgent.Services.GeminiService do
     end
   end
 
-  # Reasoning is kept out of `:content` — it is not conversation history, and
+  # Reasoning is kept out of `:content` - it is not conversation history, and
   # replaying it corrupts the next turn.
   @spec split_text([map()]) :: {String.t() | nil, String.t() | nil}
   defp split_text(parts) do

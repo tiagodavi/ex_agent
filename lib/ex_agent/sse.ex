@@ -26,7 +26,7 @@ defmodule ExAgent.SSE do
   Decodes a buffer into complete frames plus the unconsumed remainder.
 
   Comment and keep-alive events (those with no `data:` line) and frames whose
-  payload is not valid JSON are skipped rather than raising — a malformed frame
+  payload is not valid JSON are skipped rather than raising - a malformed frame
   should not tear down a stream that is otherwise fine.
 
   ## Examples
@@ -85,7 +85,7 @@ defmodule ExAgent.SSE do
       |> String.split(@line_separator)
       |> Enum.filter(&String.starts_with?(&1, "data:"))
       # The spec joins consecutive `data:` lines with a newline and strips a
-      # single leading space, not all whitespace — a JSON payload survives
+      # single leading space, not all whitespace - a JSON payload survives
       # either way, but a plain-text stream does not.
       |> Enum.map_join("\n", fn line ->
         line |> String.replace_prefix("data:", "") |> String.replace_prefix(" ", "")

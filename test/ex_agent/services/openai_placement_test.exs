@@ -4,7 +4,7 @@ defmodule ExAgent.Services.OpenAIPlacementTest do
   URL, inlined as a base64 data URI, or uploaded through the Files API.
 
   Size boundaries are driven by `Attachment.byte_size` rather than by real
-  multi-megabyte payloads — that is the field the placement logic reads, so the
+  multi-megabyte payloads - that is the field the placement logic reads, so the
   production path runs without base64-encoding 20 MB per test.
   """
 

@@ -8,7 +8,7 @@ defmodule ExAgent.Patterns.Consensus do
   Use it when being *wrong* is expensive and the answer is short enough to compare:
   a classification, a routing decision, an extracted number, a yes/no. Independent
   attempts catch the case where a model is confidently mistaken, which no amount of
-  self-review will — a critic reading one draft is easily talked into agreeing
+  self-review will - a critic reading one draft is easily talked into agreeing
   with it.
 
       alias ExAgent.Patterns.Consensus
@@ -20,14 +20,14 @@ defmodule ExAgent.Patterns.Consensus do
         )
 
       verdict.answer      # "YES"
-      verdict.agreement   # 0.8  — four of five agreed
+      verdict.agreement   # 0.8  - four of five agreed
       verdict.votes       # %{"YES" => 4, "NO" => 1}
 
   ## Disagreement is the useful part
 
   The point is not only the winning answer but how lopsided the vote was.
   `:agreement` is the winner's share, and a low number is your signal to escalate
-  — to a bigger model, to a human, or to declining to answer:
+  - to a bigger model, to a human, or to declining to answer:
 
       case Consensus.run(question, voters: provider, samples: 5) do
         {:ok, %{agreement: a} = verdict} when a >= 0.8 -> {:auto, verdict.answer}
@@ -37,7 +37,7 @@ defmodule ExAgent.Patterns.Consensus do
   ## Different voters beat repeated voters
 
   Passing one provider samples it repeatedly, which only helps if its output
-  varies — at `temperature: 0` you will pay five times for one answer. Passing a
+  varies - at `temperature: 0` you will pay five times for one answer. Passing a
   *list* of providers is stronger, because different models fail differently:
 
       Consensus.run(question, voters: [gpt, gemini, local_llama])
@@ -56,7 +56,7 @@ defmodule ExAgent.Patterns.Consensus do
 
   ## When not to use it
 
-  Long prose does not vote — two summaries are never byte-identical, so every
+  Long prose does not vote - two summaries are never byte-identical, so every
   answer wins with `1/n`. Use `ExAgent.Patterns.Reflection` to improve a long
   answer, and consensus to decide a short one.
   """
@@ -102,7 +102,7 @@ defmodule ExAgent.Patterns.Consensus do
 
   Returns `{:ok, verdict}`, or `{:error, :no_answers}` if every voter failed. Ties
   are broken by first appearance, so the winner is always the earliest of the
-  joint-highest — deterministic, but check `:agreement` before trusting a tie.
+  joint-highest - deterministic, but check `:agreement` before trusting a tie.
   """
   @spec run(String.t(), consensus_opts()) :: {:ok, verdict()} | {:error, term()}
   def run(prompt, opts) when is_binary(prompt) do

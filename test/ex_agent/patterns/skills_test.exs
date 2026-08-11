@@ -6,7 +6,7 @@ defmodule ExAgent.Patterns.SkillsTest do
   alias ExAgent.Providers.OpenAI
 
   # Happy path tests
-  describe "evaluate_skills/2" do
+  describe "evaluate/2" do
     test "returns first matching skill" do
       {:ok, skill} =
         Skill.new(
@@ -16,7 +16,7 @@ defmodule ExAgent.Patterns.SkillsTest do
         )
 
       context = Context.new()
-      assert %Skill{name: "sql"} = Skills.evaluate_skills([skill], context)
+      assert %Skill{name: "sql"} = Skills.evaluate([skill], context)
     end
 
     test "returns skill based on context content" do
@@ -31,7 +31,7 @@ defmodule ExAgent.Patterns.SkillsTest do
 
       {:ok, msg} = Message.new(role: :user, content: "SELECT * FROM users")
       context = Context.new() |> Context.add_message(msg)
-      assert %Skill{name: "sql"} = Skills.evaluate_skills([skill], context)
+      assert %Skill{name: "sql"} = Skills.evaluate([skill], context)
     end
 
     test "returns first matching skill when multiple match" do
@@ -41,26 +41,26 @@ defmodule ExAgent.Patterns.SkillsTest do
       {:ok, skill2} =
         Skill.new(name: "second", system_prompt: "Second", activation_fn: fn _ -> true end)
 
-      assert %Skill{name: "first"} = Skills.evaluate_skills([skill1, skill2], Context.new())
+      assert %Skill{name: "first"} = Skills.evaluate([skill1, skill2], Context.new())
     end
   end
 
   # Bad path tests
-  describe "evaluate_skills/2 no match" do
+  describe "evaluate/2 no match" do
     test "returns nil when no skills match" do
       {:ok, skill} =
         Skill.new(name: "sql", system_prompt: "SQL", activation_fn: fn _ -> false end)
 
-      assert nil == Skills.evaluate_skills([skill], Context.new())
+      assert nil == Skills.evaluate([skill], Context.new())
     end
 
     test "returns nil for empty skills list" do
-      assert nil == Skills.evaluate_skills([], Context.new())
+      assert nil == Skills.evaluate([], Context.new())
     end
 
     test "skips skills without activation_fn" do
       {:ok, skill} = Skill.new(name: "passive", system_prompt: "Passive")
-      assert nil == Skills.evaluate_skills([skill], Context.new())
+      assert nil == Skills.evaluate([skill], Context.new())
     end
   end
 

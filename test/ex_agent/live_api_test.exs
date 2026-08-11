@@ -6,7 +6,7 @@ defmodule ExAgent.LiveApiTest do
   place where request shapes, field names, size thresholds, and enum values are
   checked against what the providers actually accept.
 
-  These tests are tagged `:external` and excluded by default — they cost money
+  These tests are tagged `:external` and excluded by default - they cost money
   and need credentials. Run them deliberately:
 
       # everything you have credentials for
@@ -98,7 +98,7 @@ defmodule ExAgent.LiveApiTest do
 
   # Everything compiles regardless of which credentials are present; missing ones
   # turn into a `skip:` tag. That keeps one alias block valid at the top of the
-  # file — compile-time `if` blocks would leave aliases unused in partial runs —
+  # file - compile-time `if` blocks would leave aliases unused in partial runs -
   # and makes uncovered sections visible in the run output.
   @skip_openai !@openai_key && "OPENAI_API_KEY is not set"
   @skip_gemini !@gemini_key && "GEMINI_API_KEY is not set"
@@ -186,7 +186,7 @@ defmodule ExAgent.LiveApiTest do
   defp texts(chunks),
     do: chunks |> Enum.filter(&(&1.type == :text_delta)) |> Enum.map(& &1.text)
 
-  # `EX_AGENT_TEST_IMAGE_MIME` is only needed when the URL carries no extension —
+  # `EX_AGENT_TEST_IMAGE_MIME` is only needed when the URL carries no extension -
   # ExAgent never fetches a URL to sniff its type.
   defp image_file(extra \\ %{}) do
     base =
@@ -260,7 +260,7 @@ defmodule ExAgent.LiveApiTest do
   end
 
   # The multi-agent patterns are provider-agnostic; they run on whichever chat
-  # credential is present. The last clause keeps them compiling with none — those
+  # credential is present. The last clause keeps them compiling with none - those
   # tests carry @skip_chat.
   cond do
     @openai_key ->
@@ -272,7 +272,7 @@ defmodule ExAgent.LiveApiTest do
       defp role_spec, do: {Gemini, api_key: @gemini_key}
 
     true ->
-      # Unreachable at runtime — every caller carries @skip_chat — but it has to
+      # Unreachable at runtime - every caller carries @skip_chat - but it has to
       # type-check, so it delegates rather than raising.
       defp pattern_provider(opts \\ []), do: openai(opts)
       defp role_spec, do: {OpenAI, api_key: @openai_key}
@@ -492,7 +492,7 @@ defmodule ExAgent.LiveApiTest do
 
     test "accepts the web_search built-in tool" do
       # web_search_options needs a *-search-preview model, and those reject
-      # `temperature` — so the provider default has to be turned off.
+      # `temperature` - so the provider default has to be turned off.
       agent = start_agent!(openai(model: "gpt-4o-search-preview", temperature: nil))
 
       assert {:ok, response} =
@@ -817,7 +817,7 @@ defmodule ExAgent.LiveApiTest do
     test "executes a tool, or the endpoint reports tool calling is not enabled" do
       # vLLM only serves function calling when the container was started with
       # --enable-auto-tool-choice and --tool-call-parser. That is a deployment
-      # property, like :modalities, so accept that one refusal — and nothing
+      # property, like :modalities, so accept that one refusal - and nothing
       # else, so a malformed request or an auth failure still fails here.
       agent = start_agent!(compat(), tools: [weather_tool()])
 
@@ -985,7 +985,7 @@ defmodule ExAgent.LiveApiTest do
   end
 
   # v5's `task` plus `prompt_name` split is the whole reason this provider is
-  # versioned. Only a live run proves the endpoint accepts the pair as sent —
+  # versioned. Only a live run proves the endpoint accepts the pair as sent -
   # a wrong `prompt_name` is a 200 with silently worse recall, not an error.
   describe "JinaV5 · embeddings" do
     @describetag :jina
@@ -1162,7 +1162,7 @@ defmodule ExAgent.LiveApiTest do
 
   # These do not test ExAgent. They test whether the deployment behind
   # EX_AGENT_RERANK_BASE_URL is fit for retrieval at all, which is worth knowing
-  # because a broken reranker degrades answers silently — it still returns a
+  # because a broken reranker degrades answers silently - it still returns a
   # confident-looking ordering.
   describe "JinaRerankerM0 · deployment health" do
     @describetag :rerank
@@ -1210,7 +1210,7 @@ defmodule ExAgent.LiveApiTest do
 
              This is the one thing a reranker must do that embeddings cannot. Scores
              also sit far below the model card's examples (0.44-0.99), and the
-             ordering does not improve when the answer is made near-verbatim — which
+             ordering does not improve when the answer is made near-verbatim - which
              points at the served weights rather than at the query.
              """
     end
@@ -1225,7 +1225,7 @@ defmodule ExAgent.LiveApiTest do
   end
 
   # ============================================================================
-  # Provider roles — config resolution is unit-tested; what only a live run
+  # Provider roles - config resolution is unit-tested; what only a live run
   # proves is that a role-resolved struct and the stateless `*_with` wrappers
   # build requests a real endpoint accepts, since they bypass the agent that
   # every other path goes through.
@@ -1324,7 +1324,7 @@ defmodule ExAgent.LiveApiTest do
   end
 
   # ============================================================================
-  # Multi-agent patterns — provider-agnostic
+  # Multi-agent patterns - provider-agnostic
   # ============================================================================
 
   describe "Patterns · subagents" do
@@ -1352,7 +1352,7 @@ defmodule ExAgent.LiveApiTest do
         {%{name: "b", provider: pattern_provider(), description: "second"}, "Reply: OK"}
       ]
 
-      results = Subagents.invoke_subagents_parallel(specs_with_inputs)
+      results = Subagents.run(specs_with_inputs)
 
       assert length(results) == 2
       assert Enum.all?(results, fn {_name, result} -> match?({:ok, _}, result) end)
@@ -1368,7 +1368,7 @@ defmodule ExAgent.LiveApiTest do
         }
       ]
 
-      tools = Subagents.build_orchestrator_tools(specs)
+      tools = Subagents.tools(specs)
       agent = start_agent!(pattern_provider(), tools: tools)
 
       assert {:ok, response} = ExAgent.chat(agent, "Ask the mathematician what 6 * 7 is.")

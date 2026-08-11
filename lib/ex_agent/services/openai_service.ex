@@ -104,7 +104,7 @@ defmodule ExAgent.Services.OpenAIService do
 
   # Chat completions has no way to reference an uploaded *image*: `image_file`
   # is the Assistants API's shape, `image_url` demands a real URL, and the `file`
-  # part only accepts PDFs. Verified against the live API — every variant 400s.
+  # part only accepts PDFs. Verified against the live API - every variant 400s.
   defp place(_provider, %Attachment{kind: :file_ref, modality: :image}) do
     {:error,
      Error.new(
@@ -209,7 +209,7 @@ defmodule ExAgent.Services.OpenAIService do
   end
 
   @spec format_attachment(map()) :: map()
-  # Images never reach here — `place/2` refuses an uploaded image up front.
+  # Images never reach here - `place/2` refuses an uploaded image up front.
   defp format_attachment(%{file_ref: %FileRef{provider: :openai, file_id: fid}}),
     do: %{"type" => "file", "file" => %{"file_id" => fid}}
 

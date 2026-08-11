@@ -1,6 +1,6 @@
 defmodule ExAgent.UploadCacheTest do
   # The cache is a single named ETS table shared by the whole VM, and `clear/0`
-  # is global — so this file must not run alongside other cache users.
+  # is global - so this file must not run alongside other cache users.
   use ExUnit.Case, async: false
 
   alias ExAgent.{FileRef, UploadCache}

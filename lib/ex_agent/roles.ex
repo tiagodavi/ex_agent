@@ -17,7 +17,7 @@ defmodule ExAgent.Roles do
 
       ExAgent.provider!(:vision)   #=> %ExAgent.Providers.OpenAICompatible{}
 
-  Role names are arbitrary atoms — the library has no fixed set. A bare module
+  Role names are arbitrary atoms - the library has no fixed set. A bare module
   means `{module, []}`.
 
   ## Option values resolved at boot
@@ -34,7 +34,7 @@ defmodule ExAgent.Roles do
   ## Caching
 
   Roles are resolved **once**, during application start, and stored in
-  `:persistent_term`. Reads are free — no copy, no table lookup — which matters
+  `:persistent_term`. Reads are free - no copy, no table lookup - which matters
   because `ExAgent.provider!/1` sits on every request. Writes are not: each one
   triggers a global GC scan across every process in the VM, which is why
   `build!/0` is the only thing that writes and why per-call overrides
@@ -110,7 +110,7 @@ defmodule ExAgent.Roles do
   Builds a fresh provider struct for `role` with `overrides` merged over its
   configured options.
 
-  The result is **not** cached — see the caching note in the moduledoc. Building
+  The result is **not** cached - see the caching note in the moduledoc. Building
   reconstructs the `Req` client, which is fine per request but not inside a tight
   loop. Option values already resolved at boot are reused, so a vault-backed
   credential is not fetched again.
@@ -155,7 +155,7 @@ defmodule ExAgent.Roles do
       reraise ArgumentError,
               [
                 message:
-                  "role #{inspect(role)} — #{inspect(module)}.new/1 raised: " <>
+                  "role #{inspect(role)} - #{inspect(module)}.new/1 raised: " <>
                     Exception.message(error)
               ],
               __STACKTRACE__
@@ -165,14 +165,14 @@ defmodule ExAgent.Roles do
   defp ensure_provider!(role, module) do
     cond do
       not Code.ensure_loaded?(module) ->
-        raise ArgumentError, "role #{inspect(role)} — module #{inspect(module)} is not available"
+        raise ArgumentError, "role #{inspect(role)} - module #{inspect(module)} is not available"
 
       not function_exported?(module, :new, 1) ->
-        raise ArgumentError, "role #{inspect(role)} — #{inspect(module)} does not export new/1"
+        raise ArgumentError, "role #{inspect(role)} - #{inspect(module)} does not export new/1"
 
       ExAgent.Provider not in behaviours(module) ->
         raise ArgumentError,
-              "role #{inspect(role)} — #{inspect(module)} does not implement " <>
+              "role #{inspect(role)} - #{inspect(module)} does not implement " <>
                 "the ExAgent.Provider behaviour"
 
       true ->

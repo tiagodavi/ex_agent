@@ -8,7 +8,7 @@ defmodule ExAgent.Embeddings do
   ## Store the provenance alongside every vector
 
   Embedding spaces are model-scoped. Vectors from `gemini-embedding-001` and
-  `gemini-embedding-2` are **not** comparable — mixing them silently degrades
+  `gemini-embedding-2` are **not** comparable - mixing them silently degrades
   retrieval rather than failing, and the only fix is a full re-embed. The same
   applies to a change in `:dimensions` or `:task`.
 
@@ -21,7 +21,7 @@ defmodule ExAgent.Embeddings do
   belongs to the **model**, not to this library: Gemini's `taskType` is a closed
   enum of eight values, Jina v5 takes four task names plus a separate
   `prompt_name`, and OpenAI has no task field at all. There is no portable middle
-  — a shared vocabulary either loses the distinctions a model actually makes or
+  - a shared vocabulary either loses the distinctions a model actually makes or
   invents ones it does not.
 
   So each provider declares its own atoms and rejects anything outside them:
@@ -35,8 +35,8 @@ defmodule ExAgent.Embeddings do
 
   ## Extra model arguments
 
-  `:args` forwards key–value pairs into the request body for parameters this
-  library does not model — Jina's `prompt_name`, OpenAI's `encoding_format`:
+  `:args` forwards key-value pairs into the request body for parameters this
+  library does not model - Jina's `prompt_name`, OpenAI's `encoding_format`:
 
       ExAgent.embed(jina, chunks, task: :retrieval, args: [prompt_name: :document])
 
@@ -48,7 +48,7 @@ defmodule ExAgent.Embeddings do
   What to pass as `:task`: an atom from the provider's own vocabulary.
 
   Discover it with `ExAgent.embedding_tasks/1`. There is deliberately no shared
-  vocabulary and no verbatim-string escape hatch — a task string an endpoint does
+  vocabulary and no verbatim-string escape hatch - a task string an endpoint does
   not recognize is accepted with a 200 and quietly wrong vectors.
   """
   @type task :: atom()
@@ -114,7 +114,7 @@ defmodule ExAgent.Embeddings do
   Cosine similarity between two vectors, in `-1.0..1.0`.
 
   Returns `0.0` if either vector is all zeros. Raises when the vectors differ in
-  length — that almost always means they came from different models or
+  length - that almost always means they came from different models or
   dimension settings, which is a bug rather than a value worth computing.
 
   ## Examples

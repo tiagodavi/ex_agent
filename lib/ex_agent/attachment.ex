@@ -2,7 +2,7 @@ defmodule ExAgent.Attachment do
   @moduledoc """
   A normalized file attachment carried on `ExAgent.Message`.
 
-  Users never build this directly — pass plain maps under the `:files` option and
+  Users never build this directly - pass plain maps under the `:files` option and
   `ExAgent.Message.new/1` normalizes them:
 
       files: [
@@ -13,7 +13,7 @@ defmodule ExAgent.Attachment do
       ]
 
   `:mime_type` is optional and inferred from the file extension (`:path`, `:url`)
-  or magic bytes (`:data`). Supply it to override inference — an explicit value is
+  or magic bytes (`:data`). Supply it to override inference - an explicit value is
   always authoritative.
 
   Because a struct is also a map, provider services can keep pattern matching on
@@ -86,7 +86,7 @@ defmodule ExAgent.Attachment do
     end
   end
 
-  # Only the size is read up front — it is what the provider needs to choose
+  # Only the size is read up front - it is what the provider needs to choose
   # between inlining and uploading. Reading the bytes is deferred to request
   # time so a large file is not held in conversation history for every turn.
   def new(%{path: path} = att) when is_binary(path) do
@@ -133,7 +133,7 @@ defmodule ExAgent.Attachment do
   @doc """
   Loads a `:path` attachment's bytes into `:data`.
 
-  `:url` and `:file_ref` attachments pass through untouched — they are delivered
+  `:url` and `:file_ref` attachments pass through untouched - they are delivered
   by reference and must never be fetched.
   """
   @spec load(t()) :: {:ok, t()} | {:error, ExAgent.Error.t()}

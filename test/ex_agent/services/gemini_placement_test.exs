@@ -50,7 +50,7 @@ defmodule ExAgent.Services.GeminiPlacementTest do
   end
 
   # Records each request to the test process so a test can assert both what was
-  # sent and — via refute_received — what was not.
+  # sent and - via refute_received - what was not.
   defp recording_provider(opts \\ []) do
     test_pid = self()
     upload_uri = Keyword.get(opts, :upload_uri, "https://files.google/abc")

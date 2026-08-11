@@ -37,8 +37,8 @@ defmodule ExAgent.EmbedServiceTest do
     struct!(base, Keyword.merge([req: Req.new(plug: plug)], extra))
   end
 
-  # The v5 server has its own body and response shape — `texts` in, `embeddings`
-  # out, at /embed — so it needs its own stub rather than the OpenAI-style one.
+  # The v5 server has its own body and response shape - `texts` in, `embeddings`
+  # out, at /embed - so it needs its own stub rather than the OpenAI-style one.
   defp jina_provider(vectors) do
     test_pid = self()
 
@@ -196,7 +196,7 @@ defmodule ExAgent.EmbedServiceTest do
     end
   end
 
-  describe "Gemini embeddings — model families" do
+  describe "Gemini embeddings - model families" do
     test "given the default model, then it uses gemini-embedding-001 via batchEmbedContents" do
       provider = gemini_provider([[0.1]])
 
@@ -319,7 +319,7 @@ defmodule ExAgent.EmbedServiceTest do
     end
   end
 
-  describe "Gemini embeddings — the aggregation regression" do
+  describe "Gemini embeddings - the aggregation regression" do
     # A flat multi-input list returns ONE aggregated vector on gemini-embedding-2.
     # Wrapping each input in its own Content is what keeps an index from being
     # silently corrupted.
@@ -366,7 +366,7 @@ defmodule ExAgent.EmbedServiceTest do
     end
   end
 
-  describe "Gemini embeddings — dimensions and normalization" do
+  describe "Gemini embeddings - dimensions and normalization" do
     test "given dimensions on 001, then outputDimensionality is sent" do
       provider = gemini_provider([[3.0, 4.0]])
 
@@ -410,7 +410,7 @@ defmodule ExAgent.EmbedServiceTest do
       assert {:ok, %Embeddings{vectors: [vector]}} =
                ExAgent.embed(provider, ["a"], model: "gemini-embedding-2", dimensions: 768)
 
-      # Not rescaled client-side — this family normalizes its own output.
+      # Not rescaled client-side - this family normalizes its own output.
       assert vector == [3.0, 4.0]
     end
   end

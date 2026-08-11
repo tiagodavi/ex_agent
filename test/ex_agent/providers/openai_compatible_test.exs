@@ -213,7 +213,7 @@ defmodule ExAgent.Providers.OpenAICompatibleTest do
 
   # A gateway can serve a document-reading model (OpenRouter fronting Claude, a
   # Modal container running a doc VLM), so :document is declarable like any other
-  # modality — and must then be shaped as the dialect's `file` part, not squeezed
+  # modality - and must then be shaped as the dialect's `file` part, not squeezed
   # into `image_url`.
   describe "documents" do
     test "given inline document bytes, then they become a file part with base64 data" do
@@ -300,14 +300,14 @@ defmodule ExAgent.Providers.OpenAICompatibleTest do
       assert first_part(sent().body)["type"] == "image_url"
     end
 
-    test "given a url over the limit, then it is unaffected — nothing is inlined" do
+    test "given a url over the limit, then it is unaffected - nothing is inlined" do
       provider = recording_provider(max_inline_bytes: 1)
       files = [%{url: "https://cdn.example.com/huge.mp4"}]
 
       assert {:ok, _} = Provider.chat(provider, [message_with(files)])
     end
 
-    test "given a file_ref, then it is rejected — there is no Files API" do
+    test "given a file_ref, then it is rejected - there is no Files API" do
       ref = %ExAgent.FileRef{provider: :openai, file_id: "file-x", mime_type: "image/png"}
 
       assert {:error, %Error{type: :unsupported} = error} =

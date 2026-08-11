@@ -1,6 +1,6 @@
 defmodule ExAgent.Providers.JinaRerankerM0 do
   @moduledoc """
-  `jina-reranker-m0` — a **reranking-only** provider for a self-hosted server.
+  `jina-reranker-m0` - a **reranking-only** provider for a self-hosted server.
 
       provider = ExAgent.Providers.JinaRerankerM0.new(base_url: System.fetch_env!("RERANKER_URL"))
 
@@ -9,7 +9,7 @@ defmodule ExAgent.Providers.JinaRerankerM0 do
       best = ExAgent.Reranking.take(result, chunks)
 
   It implements `c:ExAgent.Provider.rerank/4` only. `chat/3` returns
-  `{:error, %ExAgent.Error{type: :unsupported}}`, and there is no `embed/3` — a
+  `{:error, %ExAgent.Error{type: :unsupported}}`, and there is no `embed/3` - a
   reranker scores query/document *pairs* and has no single-text vector to give.
 
   ## Where it belongs in retrieval
@@ -23,7 +23,7 @@ defmodule ExAgent.Providers.JinaRerankerM0 do
 
   Embeddings compare vectors computed independently, which is what makes them
   fast enough for a corpus. A cross-encoder reads the query and one document
-  together — more accurate, and far too slow to run over everything. Batches are
+  together - more accurate, and far too slow to run over everything. Batches are
   capped at 512 documents, which is the shape of the intended use.
 
   ## Behind Modal's proxy auth
@@ -39,7 +39,7 @@ defmodule ExAgent.Providers.JinaRerankerM0 do
 
   ## Scores
 
-  Higher is more relevant, and that is the only guarantee — see
+  Higher is more relevant, and that is the only guarantee - see
   `ExAgent.Reranking` on why an absolute cutoff does not port between models.
 
   ## The server contract

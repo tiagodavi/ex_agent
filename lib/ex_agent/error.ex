@@ -73,7 +73,7 @@ defmodule ExAgent.Error do
   @doc """
   Builds an error for a success response whose shape the service cannot parse.
 
-  Retryable — a malformed body is usually a transient provider-side glitch.
+  Retryable - a malformed body is usually a transient provider-side glitch.
   """
   @spec unexpected_response(term(), module() | nil) :: t()
   def unexpected_response(body, provider \\ nil) do

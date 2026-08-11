@@ -5,14 +5,14 @@ defmodule ExAgent.Reranking do
       {:ok, result} = ExAgent.rerank(provider, "who restarts processes?", chunks)
 
       for %{index: index, score: score} <- result.results do
-        IO.puts("\#{score} — \#{Enum.at(chunks, index)}")
+        IO.puts("\#{score} - \#{Enum.at(chunks, index)}")
       end
 
   ## Why rerank at all
 
   Embedding retrieval compares a query vector to document vectors computed
   *independently*, which is what makes it fast enough to run over millions of
-  rows — and also what limits it. A cross-encoder reads the query and one
+  rows - and also what limits it. A cross-encoder reads the query and one
   document **together**, so it can weigh them against each other, at a cost that
   only makes sense over a shortlist.
 
@@ -28,15 +28,15 @@ defmodule ExAgent.Reranking do
       ranked = Enum.map(result.results, fn %{index: i} -> Enum.at(rows, i) end)
 
   `:document` is populated only when the server returns the text, which is
-  optional and off by default — sending a corpus back over the wire to get it
+  optional and off by default - sending a corpus back over the wire to get it
   re-quoted is waste.
 
   ## Scores are model-scoped
 
   Higher means more relevant, and that is the only guarantee. The range is the
-  model's own: `jina-reranker-m0` emits roughly 0–1 while other cross-encoders
+  model's own: `jina-reranker-m0` emits roughly 0-1 while other cross-encoders
   emit unbounded logits. So compare scores **within one result set**, never
-  across models, and be wary of absolute cutoffs — persist `:model` next to
+  across models, and be wary of absolute cutoffs - persist `:model` next to
   anything you store, for the same reason `ExAgent.Embeddings` does.
   """
 
@@ -86,7 +86,7 @@ defmodule ExAgent.Reranking do
   @doc """
   Keeps only results scoring at or above `threshold`.
 
-  Ranking always returns *something*, even when nothing is relevant — the best of
+  Ranking always returns *something*, even when nothing is relevant - the best of
   a bad set still sorts first. A floor is how you decline to answer instead of
   feeding the model the least-irrelevant chunk.
 

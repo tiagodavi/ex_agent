@@ -3,14 +3,14 @@ defmodule ExAgent.UploadCache do
   Caches provider file uploads so the same bytes are not uploaded twice.
 
   Uploading is slow and, on some providers, billed. When the same asset is
-  attached across several turns of a conversation — or across conversations —
+  attached across several turns of a conversation - or across conversations -
   the second and later sends should reuse the first upload's
   `ExAgent.FileRef`.
 
   Entries are keyed by `{scope, sha256(bytes)}`, where the scope digests the
   provider module, base URL, and API key. Scoping by API key matters: two
   provider structs for different accounts must never share a `file_id`, because
-  one account's file reference is invalid — or worse, readable — for the other.
+  one account's file reference is invalid - or worse, readable - for the other.
   The API key itself is never stored, only its digest.
 
   ## Expiry

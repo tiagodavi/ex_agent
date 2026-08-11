@@ -233,13 +233,13 @@ defmodule ExAgent.RolesTest do
 
   describe "boot validation" do
     test "given a module that is not available, then build!/0 names the role" do
-      assert_raise ArgumentError, ~r/role :chat — module .*Missing is not available/, fn ->
+      assert_raise ArgumentError, ~r/role :chat - module .*Missing is not available/, fn ->
         configure!(chat: ExAgent.RolesTest.Missing)
       end
     end
 
     test "given a module without new/1, then build!/0 names the role" do
-      assert_raise ArgumentError, ~r/role :chat — .*WithoutNew does not export new\/1/, fn ->
+      assert_raise ArgumentError, ~r/role :chat - .*WithoutNew does not export new\/1/, fn ->
         configure!(chat: WithoutNew)
       end
     end
@@ -257,7 +257,7 @@ defmodule ExAgent.RolesTest do
           configure!(chat: ExAgent.Providers.OpenAI)
         end).message
 
-      assert message =~ "role :chat — ExAgent.Providers.OpenAI.new/1 raised:"
+      assert message =~ "role :chat - ExAgent.Providers.OpenAI.new/1 raised:"
       assert message =~ "api_key"
     end
 

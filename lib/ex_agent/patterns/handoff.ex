@@ -12,14 +12,28 @@ defmodule ExAgent.Patterns.Handoff do
 
   @type handoff_result :: {:handoff, target :: pid() | atom(), Context.t()}
 
-  @doc """
-  Creates a tool that triggers a handoff to the target agent when invoked.
+  @type spec :: %{
+          required(:name) => String.t(),
+          required(:agent) => pid() | atom(),
+          required(:description) => String.t()
+        }
 
-  The tool accepts a `"summary"` parameter that the LLM uses to
-  summarize the conversation before handoff.
+  @doc """
+  Builds one handoff tool per target agent.
+
+  Each tool is named `handoff_to_<name>` and takes a `"summary"` argument the
+  model fills in before transferring.
+
+      Handoff.tools([
+        %{name: "billing", agent: billing_agent, description: "Transfer billing questions"},
+        %{name: "tech", agent: tech_agent, description: "Transfer technical problems"}
+      ])
   """
-  @spec build_handoff_tool(String.t(), pid() | atom(), String.t()) :: Tool.t()
-  def build_handoff_tool(name, target, description) do
+  @spec tools([spec()]) :: [Tool.t()]
+  def tools(specs) when is_list(specs), do: Enum.map(specs, &tool/1)
+
+  @spec tool(spec()) :: Tool.t()
+  defp tool(%{name: name, agent: target, description: description}) do
     %Tool{
       name: "handoff_to_#{name}",
       description: description,
@@ -59,10 +73,10 @@ defmodule ExAgent.Patterns.Handoff do
   end
 
   @doc """
-  Sends a context to the target agent via GenServer.cast.
+  Sends a context to the target agent, which adopts it and returns to idle.
   """
-  @spec execute_handoff(pid() | atom(), Context.t()) :: :ok
-  def execute_handoff(target, %Context{} = context) do
+  @spec execute(pid() | atom(), Context.t()) :: :ok
+  def execute(target, %Context{} = context) do
     GenServer.cast(target, {:receive_handoff, context})
   end
 end

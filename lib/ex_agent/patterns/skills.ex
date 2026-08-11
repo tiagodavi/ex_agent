@@ -15,8 +15,8 @@ defmodule ExAgent.Patterns.Skills do
   Returns the first skill whose `activation_fn` returns `true`,
   or `nil` if no skill matches or has an activation function.
   """
-  @spec evaluate_skills([Skill.t()], Context.t()) :: Skill.t() | nil
-  def evaluate_skills(skills, %Context{} = context) do
+  @spec evaluate([Skill.t()], Context.t()) :: Skill.t() | nil
+  def evaluate(skills, %Context{} = context) do
     Enum.find(skills, fn
       %Skill{activation_fn: nil} -> false
       %Skill{activation_fn: fun} -> fun.(context)
@@ -39,7 +39,7 @@ defmodule ExAgent.Patterns.Skills do
   Deactivates the active skill, restoring the agent's own system prompt.
 
   Skills are evaluated before every turn, so one that stops matching has to be
-  undone — otherwise the first activation would overwrite the agent's persona
+  undone - otherwise the first activation would overwrite the agent's persona
   permanently.
   """
   @spec clear_skill(map()) :: map()

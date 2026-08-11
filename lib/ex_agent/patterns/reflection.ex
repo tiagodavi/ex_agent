@@ -1,6 +1,6 @@
 defmodule ExAgent.Patterns.Reflection do
   @moduledoc """
-  Draft, critique, revise — until a reviewer signs off or the budget runs out.
+  Draft, critique, revise - until a reviewer signs off or the budget runs out.
 
   **The analogy: a writer and an editor.** The writer produces a draft. The editor
   marks it up. The writer revises. Two or three rounds of that beats one person
@@ -27,7 +27,7 @@ defmodule ExAgent.Patterns.Reflection do
   ## The critic needs a way to say yes
 
   `accept?` decides when to stop. Ask the critic for a token you can match on and
-  keep the instruction blunt — "Reply APPROVED if it is correct, otherwise list
+  keep the instruction blunt - "Reply APPROVED if it is correct, otherwise list
   what is wrong". Without a stop condition the loop just burns `max_rounds` worth
   of tokens every time.
 
@@ -37,7 +37,7 @@ defmodule ExAgent.Patterns.Reflection do
   find something to complain about, so an unbounded loop is a runaway bill.
 
   When the ceiling is hit without approval you get `{:max_rounds, result}`, not
-  `{:ok, result}`. The last draft is still there — often it is good enough — but
+  `{:ok, result}`. The last draft is still there - often it is good enough - but
   you have to *choose* to use unapproved work rather than have it handed to you as
   if a reviewer had passed it.
 
@@ -45,7 +45,7 @@ defmodule ExAgent.Patterns.Reflection do
 
   If you cannot describe the acceptance criteria, a critic will produce vague
   praise and you will pay double for the same answer. If the risk is a wrong
-  *fact* rather than poor quality, prefer `ExAgent.Patterns.Consensus` — a critic
+  *fact* rather than poor quality, prefer `ExAgent.Patterns.Consensus` - a critic
   reading one draft is easy to talk into agreeing with it.
   """
 
@@ -82,7 +82,7 @@ defmodule ExAgent.Patterns.Reflection do
 
   - `:generator` (required) - provider or agent that drafts and revises
   - `:critic` - provider or agent that reviews (default: the generator, which is
-    cheaper but a weaker check — a model reviewing itself agrees with itself)
+    cheaper but a weaker check - a model reviewing itself agrees with itself)
   - `:accept?` - `(critique -> boolean)` deciding when the draft is good
     (default: the critique contains `"APPROVED"`)
   - `:max_rounds` - hard ceiling on revisions (default: `#{@default_max_rounds}`)

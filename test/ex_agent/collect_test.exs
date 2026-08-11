@@ -221,7 +221,7 @@ defmodule ExAgent.CollectTest do
 
     # A provider mapper turns a finish-reason frame into its own :done chunk, and
     # the transport appends the terminal one. Without dedup that is two, which
-    # breaks the invariant for every real response — models always finish.
+    # breaks the invariant for every real response - models always finish.
     test "given a frame carrying a finish reason, then there is still exactly one done chunk" do
       frames = [
         %{"choices" => [%{"delta" => %{"content" => "a"}}]},

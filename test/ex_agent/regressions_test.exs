@@ -63,7 +63,7 @@ defmodule ExAgent.RegressionsTest do
 
   describe "the stream transport and the caller's mailbox" do
     # `chat_stream/3` runs in the *calling* process. A bare `receive` matched
-    # anything, and `Req.parse_message/2` answering `:unknown` dropped it — so
+    # anything, and `Req.parse_message/2` answering `:unknown` dropped it - so
     # streaming inside a LiveView or GenServer silently ate that process's own
     # messages and the matching handle_info never fired.
     test "given unrelated messages in the mailbox, then streaming leaves them untouched" do
@@ -226,7 +226,7 @@ defmodule ExAgent.RegressionsTest do
     end
 
     # The assistant message used to be rebuilt with `id = name`, discarding the
-    # API's id — so calling one tool twice produced two colliding ids.
+    # API's id - so calling one tool twice produced two colliding ids.
     test "given a recorded call, then the provider's id is what goes back on the wire" do
       {:ok, assistant} =
         Message.new(
@@ -296,7 +296,7 @@ defmodule ExAgent.RegressionsTest do
 
   describe "tool results that are not strings" do
     # `to_string/1` on a map raised Protocol.UndefinedError, killing the task and
-    # surfacing as an opaque :server error — for the most natural tool shape there is.
+    # surfacing as an opaque :server error - for the most natural tool shape there is.
     test "given a tool returning a map, then it is encoded rather than crashing the turn" do
       call = %{
         "choices" => [
@@ -395,7 +395,7 @@ defmodule ExAgent.RegressionsTest do
 
       routes = [%{name: "broken", agent: crasher, match_fn: fn _input -> true end}]
 
-      assert {:ok, output} = Router.route("x", routes: routes)
+      assert {:ok, output} = Router.run("x", routes: routes)
       assert output =~ "broken"
       assert output =~ "Error"
     end
@@ -410,7 +410,7 @@ defmodule ExAgent.RegressionsTest do
       }
 
       assert [{"helper", {:error, %Error{}}}] =
-               Subagents.invoke_subagents_parallel([{spec, "hi"}])
+               Subagents.run([{spec, "hi"}])
     end
 
     test "given a subagent tool called without a query, then it answers instead of crashing" do
@@ -421,7 +421,7 @@ defmodule ExAgent.RegressionsTest do
         tools: []
       }
 
-      [tool] = Subagents.build_orchestrator_tools([spec])
+      [tool] = Subagents.tools([spec])
 
       assert {:error, message} = tool.function.(%{})
       assert message =~ "requires a \"query\""

@@ -3,7 +3,7 @@ defmodule ExAgent.Patterns.Chain do
   Sequential steps, each working on what the last one produced.
 
   **The analogy: an assembly line.** Each station does one small job to the thing
-  in front of it and passes it along. Nobody decides where the work goes — the
+  in front of it and passes it along. Nobody decides where the work goes - the
   order is fixed by you, in code.
 
   Use it when you already know the steps. "Transcribe, then extract the action
@@ -24,7 +24,7 @@ defmodule ExAgent.Patterns.Chain do
 
   A step is any function from the previous value to `{:ok, next}`,
   `{:error, reason}`, or `{:halt, value}`. `:halt` stops the line early and is
-  *not* a failure — it is how you decline to spend the rest of the calls:
+  *not* a failure - it is how you decline to spend the rest of the calls:
 
       Chain.run(ticket,
         steps: [
@@ -37,7 +37,7 @@ defmodule ExAgent.Patterns.Chain do
       )
 
   A gate is also where a human belongs. Return `{:halt, :needs_approval}`, park
-  the work, and start a second chain when someone approves it — the pattern needs
+  the work, and start a second chain when someone approves it - the pattern needs
   nothing special for that.
 
   ## When not to use it
@@ -65,7 +65,7 @@ defmodule ExAgent.Patterns.Chain do
   Runs `input` through every step in order.
 
   Returns `{:ok, value}` when every step succeeded, `{:halted, value}` when a step
-  stopped the line, and `{:error, reason}` on the first failure — along with the
+  stopped the line, and `{:error, reason}` on the first failure - along with the
   index of the step that failed, since "step 3 of 5" is the first thing you want
   to know.
   """

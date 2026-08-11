@@ -3,7 +3,7 @@ defmodule ExAgent.Patterns.WorkflowsTest do
   The four workflow patterns: Chain, Reflection, MapReduce, Consensus.
 
   Each is exercised through a stubbed provider so the *control flow* is what is
-  being tested — how many calls happen, in what order, and what the pattern does
+  being tested - how many calls happen, in what order, and what the pattern does
   when one of them fails.
   """
 
@@ -86,7 +86,7 @@ defmodule ExAgent.Patterns.WorkflowsTest do
       assert {:ok, "unchanged"} = Chain.run("unchanged", steps: [])
     end
 
-    # A gate declining is not a failure — it is the point of having gates.
+    # A gate declining is not a failure - it is the point of having gates.
     test "given a halting gate, then later steps never run" do
       steps = [
         Chain.llm(echoing("NO"), fn input -> "is #{input} a bug?" end),
@@ -188,7 +188,7 @@ defmodule ExAgent.Patterns.WorkflowsTest do
       assert result.output == "still wrong"
     end
 
-    test "given max_rounds, then the outcome is not {:ok, _} — unapproved work is not passed off as approved" do
+    test "given max_rounds, then the outcome is not {:ok, _} - unapproved work is not passed off as approved" do
       assert {:max_rounds, _result} =
                Reflection.run("t", generator: echoing("nope"), max_rounds: 1)
     end

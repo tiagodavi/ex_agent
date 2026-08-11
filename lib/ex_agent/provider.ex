@@ -25,13 +25,13 @@ defmodule ExAgent.Provider do
   Nothing beyond being a struct. The dispatcher resolves the callback module from
   `provider.__struct__` and never inspects fields. Optional conveniences:
 
-  - a `:tools` field — the agent populates it before each turn so the service can
+  - a `:tools` field - the agent populates it before each turn so the service can
     read it back; a provider with no tool support simply omits it
-  - a `:system_prompt` field — read by that provider's own service, not by the
+  - a `:system_prompt` field - read by that provider's own service, not by the
     library
 
-  Everything vendor-specific — accepted modalities, inline size ceilings, content
-  part shapes, embedding task vocabularies — belongs to the provider and its
+  Everything vendor-specific - accepted modalities, inline size ceilings, content
+  part shapes, embedding task vocabularies - belongs to the provider and its
   service, so a new provider is free to disagree with every one that ships here.
 
   ## Extensibility
@@ -61,8 +61,8 @@ defmodule ExAgent.Provider do
   Returns `{:ok, %ExAgent.Response{}}` for a regular response, `{:tool_calls, calls}`
   when the LLM wants to invoke tools, or `{:error, %ExAgent.Error{}}` on failure.
 
-  Each call is a map with `"name"`, `"args"`, and — where the provider issues
-  one — `"id"`. Models request several tools in a single turn, so this is a
+  Each call is a map with `"name"`, `"args"`, and - where the provider issues
+  one - `"id"`. Models request several tools in a single turn, so this is a
   list; returning only the first left the model believing tools had run that
   never did.
 
@@ -78,7 +78,7 @@ defmodule ExAgent.Provider do
   @doc """
   Uploads binary file data to the provider and returns a file reference.
 
-  Optional — providers without a files API (e.g. `ExAgent.Providers.OpenAICompatible`)
+  Optional - providers without a files API (e.g. `ExAgent.Providers.OpenAICompatible`)
   omit this callback.
   """
   @callback upload(provider :: struct(), binary(), String.t(), keyword()) ::
@@ -87,14 +87,14 @@ defmodule ExAgent.Provider do
   @doc """
   Streams the assistant's response as a lazy enumerable of text chunks.
 
-  Optional — providers without streaming support omit this callback.
+  Optional - providers without streaming support omit this callback.
   """
   @callback stream(provider :: struct(), [ExAgent.Message.t()], keyword()) :: Enumerable.t()
 
   @doc """
   Returns the attachment modalities this provider instance accepts.
 
-  Optional — providers that omit it are treated as text-only, so an attachment
+  Optional - providers that omit it are treated as text-only, so an attachment
   they cannot handle fails loudly instead of being dropped on the floor.
 
   Takes the provider *struct*, not the module, because a provider pointed at a
@@ -105,7 +105,7 @@ defmodule ExAgent.Provider do
   @doc """
   Generates embedding vectors for a list of inputs.
 
-  Optional — providers without an embeddings endpoint omit this callback.
+  Optional - providers without an embeddings endpoint omit this callback.
   """
   @callback embed(provider :: struct(), [ExAgent.Embeddings.input()], keyword()) ::
               {:ok, ExAgent.Embeddings.t()} | {:error, ExAgent.Error.t()}
@@ -113,7 +113,7 @@ defmodule ExAgent.Provider do
   @doc """
   Reorders `documents` by relevance to `query`.
 
-  Optional — providers without a reranking endpoint omit this callback.
+  Optional - providers without a reranking endpoint omit this callback.
 
   A reranker is a *cross-encoder*: it reads the query and one document together
   rather than comparing independently-computed vectors, which is why it is
@@ -129,7 +129,7 @@ defmodule ExAgent.Provider do
   @doc """
   Returns the embedding task atoms this provider accepts.
 
-  Optional — providers with no task field return `[]`.
+  Optional - providers with no task field return `[]`.
 
   There is no shared vocabulary: Gemini's `taskType` is a closed enum of eight
   values, Jina v5 has four names plus a separate `prompt_name`, and OpenAI has no
@@ -212,7 +212,7 @@ defmodule ExAgent.Provider do
 
   Returns a lazy enumerable of text chunks. Raises `ExAgent.Error` with
   `type: :unsupported` if the provider does not implement `stream/3`, or if any
-  attachment's modality is unsupported — a lazy enumerable has nowhere to carry
+  attachment's modality is unsupported - a lazy enumerable has nowhere to carry
   an error tuple at construction time.
   """
   @spec stream(struct(), [ExAgent.Message.t()], keyword()) :: Enumerable.t()

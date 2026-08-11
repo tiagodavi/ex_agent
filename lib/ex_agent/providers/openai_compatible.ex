@@ -6,7 +6,7 @@ defmodule ExAgent.Providers.OpenAICompatible do
   and anything else exposing `POST {base_url}/chat/completions`.
 
   Chat only. Embeddings need a task vocabulary, and "any OpenAI-compatible
-  endpoint" cannot have one — see `ExAgent.Providers.JinaV5` for the shape an
+  endpoint" cannot have one - see `ExAgent.Providers.JinaV5` for the shape an
   embeddings provider takes.
 
   ## Modal (vLLM behind Modal's proxy auth)
@@ -37,7 +37,7 @@ defmodule ExAgent.Providers.OpenAICompatible do
 
   > #### `:base_url` includes the version prefix {: .info}
   >
-  > As with `ExAgent.Providers.OpenAI`, `:base_url` is the full API root — pass
+  > As with `ExAgent.Providers.OpenAI`, `:base_url` is the full API root - pass
   > `https://host/v1`, not `https://host`. Requests are issued against
   > `\#{base_url}/chat/completions`.
 
@@ -48,7 +48,7 @@ defmodule ExAgent.Providers.OpenAICompatible do
   does not. It defaults to `[:text]`, so a misconfigured deployment fails loudly
   rather than firing video at a model that cannot read it.
 
-  All four media modalities are declarable — `:image`, `:video`, `:audio`, and
+  All four media modalities are declarable - `:image`, `:video`, `:audio`, and
   `:document`. Documents are shaped as the dialect's `file` content part
   (`file_data` for bytes, `file_url` for a URL), which is what a gateway fronting
   a document-reading model expects:
@@ -68,7 +68,7 @@ defmodule ExAgent.Providers.OpenAICompatible do
   Compatible endpoints have no upload endpoint, so bytes are always sent as
   `data:` URIs. Past `:max_inline_bytes` (32 MB by default) the call returns
   `{:error, %ExAgent.Error{type: :unsupported}}` telling you to host the asset at
-  a URL the container can reach — it is never silently truncated or retried.
+  a URL the container can reach - it is never silently truncated or retried.
 
 
   ## Verifying the served model
@@ -84,7 +84,7 @@ defmodule ExAgent.Providers.OpenAICompatible do
 
   @behaviour ExAgent.Provider
 
-  # See `ExAgent.Providers.OpenAI`. `:headers` is redacted too — this is where
+  # See `ExAgent.Providers.OpenAI`. `:headers` is redacted too - this is where
   # Modal keys and other gateway credentials live.
   @derive {Inspect, except: [:api_key, :headers, :req]}
 
@@ -159,7 +159,7 @@ defmodule ExAgent.Providers.OpenAICompatible do
   @doc """
   Creates a provider with validated options and an initialized Req client.
 
-  Performs no network I/O — use `probe/1` to verify the served model.
+  Performs no network I/O - use `probe/1` to verify the served model.
 
   ## Options
 
@@ -176,7 +176,7 @@ defmodule ExAgent.Providers.OpenAICompatible do
   Checks that the endpoint serves the configured model.
 
   Issues `GET {base_url}/models` and compares the result against `:model`.
-  Returns `:ok` when the model is listed, and an `ExAgent.Error` otherwise —
+  Returns `:ok` when the model is listed, and an `ExAgent.Error` otherwise -
   including when the endpoint is unreachable.
 
   A mismatch is reported rather than raised: some gateways do not enumerate

@@ -76,7 +76,7 @@ defmodule ExAgent.ProviderTest do
   end
 
   # The agent populates :tools on the provider struct so services can read it,
-  # but a provider with no tool support has no reason to carry the field — and a
+  # but a provider with no tool support has no reason to carry the field - and a
   # KeyError surfacing as an opaque :server error is a poor way to say so.
   describe "providers without a :tools field" do
     test "given a chat turn, then the agent does not require the field" do
@@ -165,12 +165,12 @@ defmodule ExAgent.ProviderTest do
       provider = MinimalProvider.new(api_key: "x")
       {:ok, msg} = Message.new(role: :user, content: "Hello")
 
-      # No modality error — it fails later at the HTTP layer, not the gate.
+      # No modality error - it fails later at the HTTP layer, not the gate.
       refute match?({:error, %Error{type: :unsupported}}, Provider.chat(provider, [msg]))
     end
 
     test "given an image on a narrowed OpenAI model, then it is rejected before any request" do
-      # Without this the request is built happily and the API 400s instead — the
+      # Without this the request is built happily and the API 400s instead - the
       # modality gate exists precisely so that fails here, loudly.
       provider = OpenAI.new(api_key: "sk-test", model: "o1-mini", modalities: [:text])
 

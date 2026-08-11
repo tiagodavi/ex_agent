@@ -72,8 +72,8 @@ defmodule ExAgent.Message do
   @doc """
   Applies `fun` to every attachment on every message, halting on the first error.
 
-  Provider services use this to resolve attachments — loading bytes, uploading
-  oversized files — before building a request body, so their formatting
+  Provider services use this to resolve attachments - loading bytes, uploading
+  oversized files - before building a request body, so their formatting
   functions stay free of IO.
   """
   @spec map_attachments([t()], (attachment() -> {:ok, attachment()} | {:error, error})) ::

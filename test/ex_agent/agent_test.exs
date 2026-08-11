@@ -118,7 +118,7 @@ defmodule ExAgent.AgentTest do
     # returns a bare `:ok`, so a tool returning an unwrapped value must be taken
     # as the result rather than crashing the loop with a CaseClauseError.
     # A failed turn used to stay in history, so a message the provider can never
-    # accept — a rejected attachment — was resent on every later turn and broke
+    # accept - a rejected attachment - was resent on every later turn and broke
     # the agent permanently. "Fails loudly" must not mean "fails forever".
     test "given a rejected attachment on a stream, then it yields an error chunk, not a raise" do
       # chat_stream/3 documents that it never raises; the modality gate raises

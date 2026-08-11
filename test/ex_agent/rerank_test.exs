@@ -84,7 +84,7 @@ defmodule ExAgent.RerankTest do
       assert sent().body["top_n"] == 1
     end
 
-    # `:index` is the contract, so echoing the corpus back is pure waste — but the
+    # `:index` is the contract, so echoing the corpus back is pure waste - but the
     # server defaults to doing it, which makes the explicit `false` load-bearing.
     test "given no option, then documents are not requested back" do
       provider = reranker(scored([{0, 0.5}]))

@@ -5,10 +5,10 @@ defmodule ExAgent.Services.GeminiEmbedService do
   Gemini's embedding models express the task in two incompatible ways, so the
   model name selects a *family*:
 
-  - `:task_type` (`gemini-embedding-001`, `text-embedding-004`) — the task is a
+  - `:task_type` (`gemini-embedding-001`, `text-embedding-004`) - the task is a
     `taskType` enum field on the request, and truncated output is **not**
     normalized, so it is scaled client-side.
-  - `:prefix` (`gemini-embedding-2`) — there is no `taskType` field; the task is
+  - `:prefix` (`gemini-embedding-2`) - there is no `taskType` field; the task is
     written into the text itself, and truncated output is self-normalizing.
 
   Requests always go through `batchEmbedContents` with one `Content` per input.
@@ -24,7 +24,7 @@ defmodule ExAgent.Services.GeminiEmbedService do
   @full_dimensions 3072
 
   # Gemini's `taskType` enum, as atoms. This is Gemini's vocabulary, not a shared
-  # one — Jina v5 and OpenAI have nothing resembling it.
+  # one - Jina v5 and OpenAI have nothing resembling it.
   @tasks ~w(retrieval_query retrieval_document similarity classification
             clustering question_answering fact_verification code_query)a
 
@@ -105,8 +105,8 @@ defmodule ExAgent.Services.GeminiEmbedService do
   end
 
   # Fail loudly on an unknown model. Guessing is worse than erroring: sending a
-  # taskType to a model that ignores it — or prefixing text for a model that does
-  # not expect it — returns HTTP 200 with plausible floats that land in a vector
+  # taskType to a model that ignores it - or prefixing text for a model that does
+  # not expect it - returns HTTP 200 with plausible floats that land in a vector
   # store and quietly degrade retrieval forever. There is no later signal.
   @spec family(String.t(), atom() | nil) :: {:ok, :task_type | :prefix} | {:error, Error.t()}
   defp family(_model, override) when override in [:task_type, :prefix], do: {:ok, override}

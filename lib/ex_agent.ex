@@ -4,7 +4,7 @@ defmodule ExAgent do
 
   One behaviour (`ExAgent.Provider`) abstracts OpenAI, Gemini, and any
   OpenAI-compatible endpoint; OTP primitives orchestrate them. The
-  [README](readme.html) is the full guide with end-to-end recipes — this page is
+  [README](readme.html) is the full guide with end-to-end recipes - this page is
   the API surface.
 
   ## Quick start
@@ -18,7 +18,7 @@ defmodule ExAgent do
   ## Roles
 
   Declare which provider serves which purpose in config, then name the purpose at
-  the call site — see `ExAgent.Roles`.
+  the call site - see `ExAgent.Roles`.
 
       # config/runtime.exs
       config :ex_agent, :roles,
@@ -35,7 +35,7 @@ defmodule ExAgent do
 
       {:ok, response} = agent |> ExAgent.chat_stream("Explain OTP") |> ExAgent.collect()
 
-  Attach files with `files:` — `:path`, `:data`, `:url`, or `:file_ref`. Inline
+  Attach files with `files:` - `:path`, `:data`, `:url`, or `:file_ref`. Inline
   versus upload is decided per attachment against provider limits; see
   `ExAgent.Attachment`.
 
@@ -44,7 +44,7 @@ defmodule ExAgent do
   ## Embeddings
 
   Stateless, so `embed/3` takes a provider struct rather than an agent pid.
-  Persist `model`, `dimensions`, and `task` alongside every vector — see
+  Persist `model`, `dimensions`, and `task` alongside every vector - see
   `ExAgent.Embeddings`.
 
       {:ok, docs} = ExAgent.embed(gemini, chunks, task: :retrieval_document)
@@ -58,7 +58,7 @@ defmodule ExAgent do
   ## Reranking
 
   A reranker orders a shortlist the embeddings stage fetched, reading the query
-  and each document together — see `ExAgent.Reranking`.
+  and each document together - see `ExAgent.Reranking`.
 
       {:ok, ranked} = ExAgent.rerank(reranker, question, shortlist, top_n: 10)
 
@@ -70,7 +70,7 @@ defmodule ExAgent do
 
   ## Observability
 
-  Every provider call emits `:telemetry` events — latency, token counts, and the
+  Every provider call emits `:telemetry` events - latency, token counts, and the
   normalized error type. See `ExAgent.Telemetry`.
 
   ## Agent architectures
@@ -80,26 +80,26 @@ defmodule ExAgent do
 
   *You* fix the order:
 
-  - `ExAgent.Patterns.Chain` — a fixed sequence of steps, with gates between them
+  - `ExAgent.Patterns.Chain` - a fixed sequence of steps, with gates between them
 
   The *input* picks the path:
 
-  - `ExAgent.Patterns.Router` — match the input, dispatch in parallel, synthesize
+  - `ExAgent.Patterns.Router` - match the input, dispatch in parallel, synthesize
 
   The *model* decides:
 
-  - `ExAgent.Patterns.Subagents` — specialists invoked as tools, contexts isolated
+  - `ExAgent.Patterns.Subagents` - specialists invoked as tools, contexts isolated
 
   Control moves:
 
-  - `ExAgent.Patterns.Handoff` — hand the conversation to another agent
-  - `ExAgent.Patterns.Skills` — swap persona and tools inside one conversation
+  - `ExAgent.Patterns.Handoff` - hand the conversation to another agent
+  - `ExAgent.Patterns.Skills` - swap persona and tools inside one conversation
 
   Quality and scale:
 
-  - `ExAgent.Patterns.Reflection` — draft, critique, revise until accepted
-  - `ExAgent.Patterns.MapReduce` — split an oversized input, process, combine
-  - `ExAgent.Patterns.Consensus` — sample several answers, go with the agreement
+  - `ExAgent.Patterns.Reflection` - draft, critique, revise until accepted
+  - `ExAgent.Patterns.MapReduce` - split an oversized input, process, combine
+  - `ExAgent.Patterns.Consensus` - sample several answers, go with the agreement
   """
 
   alias ExAgent.{Agent, Chunk, Context, FileRef, Message, Provider, Roles}
@@ -110,13 +110,13 @@ defmodule ExAgent do
   @doc """
   Returns the provider struct configured for `role`, raising if there is none.
 
-  The struct is usable anywhere a hand-built one is — `start_agent/1`,
+  The struct is usable anywhere a hand-built one is - `start_agent/1`,
   `ExAgent.Provider.chat/3`, subagent specs, and every multi-agent pattern:
 
       {:ok, agent} = ExAgent.start_agent(provider: ExAgent.provider!(:chat))
 
   With `overrides`, returns a *fresh* struct built from the role's configured
-  options with `overrides` merged over them — for per-tenant keys or per-request
+  options with `overrides` merged over them - for per-tenant keys or per-request
   model selection:
 
       ExAgent.provider!(:chat, api_key: tenant.openai_key, model: "gpt-4o-mini")
@@ -151,7 +151,7 @@ defmodule ExAgent do
 
   Stateless: no agent process, no conversation history, no tool loop. If the
   role's provider carries `tools:`, a tool request comes back as the raw
-  `{:tool_calls, calls}` from `c:ExAgent.Provider.chat/3` — **tools are not
+  `{:tool_calls, calls}` from `c:ExAgent.Provider.chat/3` - **tools are not
   executed**. Use `start_agent(role: role, tools: [...])` when you want the loop.
 
   Accepts the same `:files` option as `chat/3`.
@@ -284,7 +284,7 @@ defmodule ExAgent do
   resolved first. The conversation context is committed when the stream is fully
   consumed, so the returned stream must be consumed.
 
-  Never raises — failures arrive as a terminal `:done` chunk carrying an
+  Never raises - failures arrive as a terminal `:done` chunk carrying an
   `ExAgent.Error`.
 
   ## Examples
@@ -449,7 +449,7 @@ defmodule ExAgent do
   @doc """
   Generates embedding vectors for one or more inputs.
 
-  Takes a provider struct directly rather than an agent pid — embedding is
+  Takes a provider struct directly rather than an agent pid - embedding is
   stateless and has no conversation to carry.
 
   ## Options
@@ -458,7 +458,7 @@ defmodule ExAgent do
     the provider's *chat* model)
   - `:dimensions` - output dimensionality, where the provider supports truncation
   - `:task` - what the embedding is for, as an atom from **that provider's** own
-    vocabulary — see `embedding_tasks/1`. There is no shared set: Gemini's
+    vocabulary - see `embedding_tasks/1`. There is no shared set: Gemini's
     `taskType` enum, Jina v5's four task names, and OpenAI's absent task field
     have no common middle. An unknown task is an error naming the accepted ones,
     never a silently dropped field
@@ -483,7 +483,7 @@ defmodule ExAgent do
         |> Enum.with_index()
         |> Enum.sort_by(&elem(&1, 0), :desc)
 
-  Persist `docs.model`, `docs.dimensions`, and `docs.task` alongside the vectors —
+  Persist `docs.model`, `docs.dimensions`, and `docs.task` alongside the vectors -
   see `ExAgent.Embeddings` for why.
   """
   @spec embed(struct(), [ExAgent.Embeddings.input()] | String.t(), keyword()) ::
@@ -499,7 +499,7 @@ defmodule ExAgent do
   @doc """
   Reorders `documents` by relevance to `query`.
 
-  Takes a provider struct directly, like `embed/3` — reranking is stateless.
+  Takes a provider struct directly, like `embed/3` - reranking is stateless.
   A provider with no reranking endpoint returns
   `{:error, %ExAgent.Error{type: :unsupported}}`.
 
@@ -558,14 +558,14 @@ defmodule ExAgent do
   @doc """
   Routes input through matching agents and synthesizes results.
 
-  See `ExAgent.Patterns.Router.route/2` for options.
+  See `ExAgent.Patterns.Router.run/2` for options.
   """
   @spec route(String.t(), Router.router_opts()) :: {:ok, String.t()} | {:error, term()}
-  defdelegate route(input, opts), to: Router
+  defdelegate route(input, opts), to: Router, as: :run
 
   @doc """
   Transfers conversation context to a target agent.
   """
   @spec handoff(pid() | atom(), Context.t()) :: :ok
-  defdelegate handoff(target, context), to: Handoff, as: :execute_handoff
+  defdelegate handoff(target, context), to: Handoff, as: :execute
 end

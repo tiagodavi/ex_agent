@@ -7,7 +7,7 @@
   strings and a verbatim-string escape hatch. That model does not survive contact with real
   endpoints: Gemini's `taskType` is a closed enum of eight, Jina v5 has four task names plus
   a separate `prompt_name`, and OpenAI has no task field at all. Translating between them
-  meant either dropping distinctions a model makes or inventing ones it does not — and the
+  meant either dropping distinctions a model makes or inventing ones it does not - and the
   built-in map was already wrong, mapping `:retrieval_document` to Jina v3's
   `"retrieval.passage"`, which v5 removed.
 
@@ -16,7 +16,7 @@
   `c:ExAgent.Provider.embedding_tasks/1` callback.
 
   **Removed** from `ExAgent.Embeddings`: `tasks/0`, `valid_task?/1`, the `task_input` type,
-  the `:task_map` option, and verbatim string tasks. A string is now rejected everywhere — an endpoint that does not recognize a task
+  the `:task_map` option, and verbatim string tasks. A string is now rejected everywhere - an endpoint that does not recognize a task
   string answers 200 and leaves quietly wrong vectors in an index, so there is no safe
   version of "send it and hope".
 
@@ -28,6 +28,37 @@
   is gone; the provider is chat-only. Use `ExAgent.Providers.JinaV5`, or a provider of your
   own, for embeddings against a self-hosted model.
 
+### Changed
+
+- **Pattern API is uniform.** Every workflow entry point is now `run/2` or `run/3`, and
+  every builder that hands tools to an agent is `tools/1`. Three conventions had grown up
+  side by side, and the `build_` prefix said nothing that the return type did not.
+
+  | Before | Now |
+  |---|---|
+  | `Subagents.build_orchestrator_tools/1` | `Subagents.tools/1` |
+  | `Subagents.invoke_subagents_parallel/2` | `Subagents.run/2` |
+  | `Handoff.build_handoff_tool/3` | `Handoff.tools/1` |
+  | `Handoff.execute_handoff/2` | `Handoff.execute/2` |
+  | `Router.route/2` | `Router.run/2` |
+  | `Skills.evaluate_skills/2` | `Skills.evaluate/2` |
+
+  `Handoff.tools/1` now takes a list of `%{name:, agent:, description:}` specs and returns
+  a list, matching `Subagents.tools/1` exactly, so building several handoff targets is one
+  call. `ExAgent.route/2` and `ExAgent.handoff/2` are unchanged.
+
+- **The README is now a tutorial**, not a feature tour. Eleven steps from "ask one
+  question" to a composed support pipeline, each a complete program you can paste into
+  `iex -S mix`. Every block was executed against a live API before publishing, and the
+  outputs shown are from real runs with a note that models vary.
+
+  The step order is the teaching order: tool, then skill, then subagent, then handoff,
+  followed by a table answering the question people actually have - *who answers the next
+  message?* A subagent is a phone call you make while the customer waits; a handoff is
+  passing the customer to a colleague.
+
+- Em dashes removed from all documentation and source comments.
+
 ### Added
 
 - **Four workflow patterns**, filling the gaps against the commonly documented
@@ -37,14 +68,14 @@
   routing, orchestrator-workers, peer transfer, progressive disclosure, and the
   ReAct-style tool loop; these are the rest:
 
-  - **`ExAgent.Patterns.Chain`** — a fixed sequence of steps, each working on the
+  - **`ExAgent.Patterns.Chain`** - a fixed sequence of steps, each working on the
     last one's output. Steps are plain functions, so validation, parsing, and
     database lookups sit in the line beside the LLM calls; `Chain.llm/2` builds an
     LLM step. A step returning `{:halt, value}` stops the line *without* it being a
-    failure, which is how you decline to spend the remaining calls — and where a
+    failure, which is how you decline to spend the remaining calls - and where a
     human approval gate belongs. Errors carry the failing step's index.
 
-  - **`ExAgent.Patterns.Reflection`** — the evaluator-optimizer loop: draft,
+  - **`ExAgent.Patterns.Reflection`** - the evaluator-optimizer loop: draft,
     critique, revise, until the critic accepts or `max_rounds` (default 3) runs out.
     Exhausting the ceiling returns **`{:max_rounds, result}`**, not `{:ok, result}`:
     the last draft is there, but using unreviewed work has to be a choice rather
@@ -52,28 +83,28 @@
     always find something to complain about, so the ceiling is the difference
     between a workflow and a runaway bill.
 
-  - **`ExAgent.Patterns.MapReduce`** — parallelization by sectioning: split an
+  - **`ExAgent.Patterns.MapReduce`** - parallelization by sectioning: split an
     oversized input, process the pieces concurrently, combine them with either a
     function or another model (`reduce: {target, prompt_builder}`). One failing
     section does not fail the run; the reducer sees what survived and `:failures`
     reports the rest, because a summary of 38 of 40 interviews is worth having but
     not worth mistaking for all 40.
 
-  - **`ExAgent.Patterns.Consensus`** — parallelization by voting: ask several times
+  - **`ExAgent.Patterns.Consensus`** - parallelization by voting: ask several times
     (or several models) and go with the answer that recurs. `:agreement` is the
-    winner's share, which is the actual product — a low number is the signal to
+    winner's share, which is the actual product - a low number is the signal to
     escalate rather than proceed. Ties resolve to the earliest answer
     deterministically, which needs care because `Enum.frequencies/1` returns a map
     and a map has no insertion order to fall back on.
 
   All four accept either a provider struct (stateless, no process) or a running
-  agent (remembers the conversation) wherever they take a target — previously
+  agent (remembers the conversation) wherever they take a target - previously
   `Router` took only agents and `Subagents` only provider structs, and neither
   could be handed the other.
 
   Deliberately **not** added: plan-and-execute, which needs an LLM-authored plan
   parsed into executable steps and is brittle in exactly the way the rest of this
-  library tries not to be — compose it from `Chain` and `Subagents` instead; and
+  library tries not to be - compose it from `Chain` and `Subagents` instead; and
   blackboard/swarm topologies, which the production write-ups consistently report
   losing to hierarchical and graph shapes.
 
@@ -81,7 +112,7 @@
 
 - The README's pattern section is now a **guide to choosing one**, not a feature
   list: analogies for all eight, a table keyed on when to reach for each, and
-  worked comparisons of the pairs people conflate — Handoff vs Subagents (a lookup
+  worked comparisons of the pairs people conflate - Handoff vs Subagents (a lookup
   versus a transfer, settled by "who is the user talking to now?"), Skills vs
   Subagents (continuity versus isolation), and Reflection vs Consensus (sloppy work
   versus wrong work).
@@ -90,11 +121,11 @@
   `c:ExAgent.Provider.rerank/4` callback, returning an `ExAgent.Reranking` struct. Retrieval's
   second stage: embeddings compare independently computed vectors, which is what makes
   searching a corpus feasible, while a cross-encoder reads the query and one document
-  together — more accurate, and far too slow to run over everything.
+  together - more accurate, and far too slow to run over everything.
 
   `:index` is the contract, pointing back into the list you passed, so results map onto your
   own records without the server echoing text back. `ExAgent.Reranking.take/2` reorders a
-  list; `above/2` applies a relevance floor, because ranking always returns *something* —
+  list; `above/2` applies a relevance floor, because ranking always returns *something* -
   the best of an irrelevant set still sorts first, and a floor is how you decline to answer.
   Scores are model-scoped: higher is more relevant and that is the only guarantee.
 
@@ -102,24 +133,24 @@
   `{:error, %ExAgent.Error{type: :unsupported}}`. Emits
   `[:ex_agent, :rerank, :start | :stop | :exception]` telemetry.
 
-- **`ExAgent.Providers.JinaRerankerM0`** — a reranking-only provider for a self-hosted
+- **`ExAgent.Providers.JinaRerankerM0`** - a reranking-only provider for a self-hosted
   `jina-reranker-m0` server. `chat/3` returns `:unsupported`, and there is no `embed/3`: a
   reranker scores query/document *pairs* and has no single-text vector to give.
 
   `:base_url` is required and takes bearer auth plus arbitrary `:headers`, so Modal's proxy
   auth works. Empty document lists, non-string documents, batches over 512, a blank query,
-  a non-positive `:top_n`, and unrecognized options are all rejected before the request —
+  a non-positive `:top_n`, and unrecognized options are all rejected before the request -
   the server rejects unknown body fields outright, so a typo has to be caught client-side or
   it comes back as a validation blob.
 
-  The wire contract — `POST {base_url}/v1/rerank` with `query`/`documents`/`top_n`/
-  `return_documents`, answering `results` with `relevance_score` and `document.text` — was
+  The wire contract - `POST {base_url}/v1/rerank` with `query`/`documents`/`top_n`/
+  `return_documents`, answering `results` with `relevance_score` and `document.text` - was
   verified against a live deployment. `return_documents` defaults to `true` there and
   `false` here, since `:index` already identifies each document. This is **not** the shape of
   Jina's hosted `api.jina.ai/v1/rerank`, whose `documents` take `{"text": ...}` /
   `{"image": ...}` objects.
 
-- **`ExAgent.Providers.JinaV5`** — an embeddings-only provider for a self-hosted Jina
+- **`ExAgent.Providers.JinaV5`** - an embeddings-only provider for a self-hosted Jina
   embeddings v5 server, with v5's own tasks: `:retrieval`, `:text_matching`, `:clustering`,
   `:classification`. v5 moved the query/document distinction *out* of the task and into a
   separate `prompt_name`, which is why the module is named for the version: v3 and v4
@@ -130,19 +161,19 @@
   truncation is validated against the trained widths (32, 64, 128, 256, 512, 768, 1024);
   batches are capped at 512 inputs. All three are rules the server enforces, checked
   client-side so the failure names the fix instead of arriving as a 400. The server owns
-  normalization, so vectors are returned untouched — `args: [normalize: false]` really does
+  normalization, so vectors are returned untouched - `args: [normalize: false]` really does
   give you a non-unit vector.
 
   `chat/3` returns `{:error, %ExAgent.Error{type: :unsupported}}` pointing at a chat
   provider. `:base_url` is required and takes bearer auth plus arbitrary `:headers`, so
   Modal's proxy auth works.
 
-  The wire contract — `POST {base_url}/embed` with `texts`/`task`/`prompt_name`/
-  `dimensions`/`normalize`, answering `embeddings` — was verified against a live deployment,
+  The wire contract - `POST {base_url}/embed` with `texts`/`task`/`prompt_name`/
+  `dimensions`/`normalize`, answering `embeddings` - was verified against a live deployment,
   not inferred from a model card. It is **not** the shape of Jina's hosted `api.jina.ai`
   service, which speaks an OpenAI-style `/v1/embeddings`.
 
-- **`:args` on `embed/3`** — extra request-body parameters as a keyword list or map, for
+- **`:args` on `embed/3`** - extra request-body parameters as a keyword list or map, for
   what this library does not model:
 
       ExAgent.embed(jina, chunks, task: :retrieval, args: [prompt_name: :document])
@@ -175,7 +206,7 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
   `:max_output_tokens` spelling is accepted as an alias.
 
 - **A Gemini reasoning part was returned as the answer.** Only the first content part was
-  read, and a `thought` part matched the text clause — so the model's scratchpad became
+  read, and a `thought` part matched the text clause - so the model's scratchpad became
   `:content` and the real answer was discarded. Text split across parts was truncated to
   the first piece for the same reason. Reasoning now lands in `:thinking`, as it already
   did when streaming.
@@ -186,17 +217,17 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
   accepted from providers written against the older contract.
 
 - **Tool call ids were fabricated.** The assistant message was rebuilt with `id = name`,
-  discarding the id the API issued — so calling one tool twice in a turn produced two
+  discarding the id the API issued - so calling one tool twice in a turn produced two
   colliding ids. The provider's id is now carried through, and a tool result correlates
   back by it (Gemini correlates by function name, which travels alongside).
 
 - **A tool returning anything but a string crashed the turn.** `to_string/1` on a map
   raised `Protocol.UndefinedError`, killing the task and surfacing as an opaque `:server`
-  error — for the most natural tool shape there is. Non-string results are now JSON
+  error - for the most natural tool shape there is. Non-string results are now JSON
   encoded.
 
 - **A skill never deactivated.** Applying one overwrote the provider's `system_prompt`
-  permanently, so the first activation repainted the agent for the rest of its life — a
+  permanently, so the first activation repainted the agent for the rest of its life - a
   "SQL expert" answering jokes. Skills are re-evaluated every turn and now restore the
   agent's own prompt when they stop matching.
 
@@ -209,7 +240,7 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
   a `CaseClauseError` instead of a normalized `{:error, %ExAgent.Error{}}`.
 
 - **OpenAI could never reference an uploaded image.** Attachments over the inline ceiling
-  were uploaded and then referenced as an `image_file` content part — which is the
+  were uploaded and then referenced as an `image_file` content part - which is the
   Assistants API's shape and which chat completions rejects outright. Verified against
   the live API: no file-id shape works for images there. Oversized images and image
   `file_refs` now return `{:error, %ExAgent.Error{type: :unsupported}}` with the fix in
@@ -221,7 +252,7 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
   gateway credentials live.
 
 - **Streaming with tools billed twice.** The tool loop ran non-streamed to completion and
-  then *discarded the finished answer* to regenerate it as a stream — two full completions
+  then *discarded the finished answer* to regenerate it as a stream - two full completions
   per streamed turn. Every turn is now streamed once, with tools run between turns; the
   consumer still sees exactly one terminal `:done` chunk.
 
@@ -250,7 +281,7 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
 ### Added
 
 - **`ExAgent.Telemetry`.** `[:ex_agent, :chat | :embed | :tool, :start | :stop | :exception]`
-  events carrying duration, token counts, model, and — on failure — `:error_type` and
+  events carrying duration, token counts, model, and - on failure - `:error_type` and
   `:retryable?`. A library that calls billed APIs has to be measurable; nothing is logged
   on your behalf. Adds a `:telemetry` dependency.
 
@@ -266,14 +297,14 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
 
 - **Provider roles.** `config :ex_agent, :roles, chat: {Module, opts}` maps a purpose to
   a provider, and `ExAgent.provider!(:chat)` returns an ordinary provider struct usable
-  anywhere a hand-built one is — `start_agent/1`, `ExAgent.Provider.chat/3`, subagent
+  anywhere a hand-built one is - `start_agent/1`, `ExAgent.Provider.chat/3`, subagent
   specs, every pattern. Role names are arbitrary atoms. `start_agent(role: :vision)` is
   shorthand; `:role` and `:provider` are mutually exclusive.
 
   Purely additive: every existing entry point still takes a struct, unchanged.
 
   `ExAgent.chat_with/3`, `stream_with/3` and `embed_with/3` are stateless one-shot
-  wrappers that bypass the agent GenServer. They do **not** run the tool loop — a
+  wrappers that bypass the agent GenServer. They do **not** run the tool loop - a
   tool-configured provider returns the raw `{:tool_call, name, args}`.
 
   Roles resolve once at application start and cache in `:persistent_term`, so lookups
@@ -284,7 +315,7 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
   first request. Option values may be a zero-arity function or `{m, f, a}`, resolved once
   at boot, for vault-backed credentials.
 
-  Note that this is the first thing in `lib/` to read `Application.get_env` — the library
+  Note that this is the first thing in `lib/` to read `Application.get_env` - the library
   was otherwise configured entirely through explicit structs, and still can be.
 
 - **`ExAgent.Error`.** A normalized error struct returned by every provider operation,
@@ -296,7 +327,7 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
   The struct is also an exception, so it can be raised where no return value exists.
 
 - **URL file sources.** `files: [%{url: "https://..."}]` hands the URL straight to the
-  provider — Gemini as `file_data.file_uri`, OpenAI as `image_url` / `file_url`. ExAgent
+  provider - Gemini as `file_data.file_uri`, OpenAI as `image_url` / `file_url`. ExAgent
   never fetches the URL, so no bytes cross your application.
 - **Optional `:mime_type`.** Inferred from the file extension for `:path` and `:url`
   (query strings ignored) and from magic bytes for `:data` (PNG, JPEG, GIF, WebP, WAV,
@@ -315,7 +346,7 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
   so an unsupported attachment fails loudly instead of being dropped.
 
   Every built-in provider takes a `:modalities` option, because modality support is a
-  property of the *model*, not the vendor — `o1-mini` reads no images. Defaults are
+  property of the *model*, not the vendor - `o1-mini` reads no images. Defaults are
   `[:text, :image, :document]` for OpenAI, those plus `:video` and `:audio` for Gemini,
   and `[:text]` for `OpenAICompatible` (one container serves one model). Narrowing makes
   the gate fire locally instead of letting the provider 400 later:
@@ -327,7 +358,7 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
 
 - **Embeddings.** `ExAgent.embed(provider, inputs, opts)` returns an
   `%ExAgent.Embeddings{}` carrying `vectors`, `model`, `provider`, `dimensions`, `task`,
-  and `usage`. It takes a provider struct rather than an agent pid — embedding is
+  and `usage`. It takes a provider struct rather than an agent pid - embedding is
   stateless. Backed by a new optional `c:ExAgent.Provider.embed/3` callback; providers
   without an embeddings endpoint return
   `{:error, %ExAgent.Error{type: :unsupported}}`.
@@ -346,10 +377,10 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
   `gemini-embedding-2`; OpenAI responses are re-sorted by `index`, which the API does not
   guarantee; and truncated `gemini-embedding-001` vectors are L2-normalized client-side,
   which that model does not do for you. An unknown Gemini embedding model errors rather
-  than guessing a family — pass `:embedding_family` to adopt a newer one.
+  than guessing a family - pass `:embedding_family` to adopt a newer one.
 
   On `OpenAICompatible` only, `:task` also accepts a **raw string**, sent verbatim with
-  no translation and no validation — a self-hosted endpoint serves whatever model you
+  no translation and no validation - a self-hosted endpoint serves whatever model you
   deployed, and those vocabularies change between versions (Jina v3's
   `"retrieval.passage"` became a `"retrieval"` task plus a prompt in v5, which also added
   `"text-matching"`). Gemini and OpenAI take atoms only: `taskType` is a closed enum and
@@ -359,10 +390,10 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
 
   `ExAgent.Embeddings` also exposes `tasks/0`, `valid_task?/1`, `l2_normalize/1`, and
   `cosine_similarity/2`. **Persist `model`, `dimensions`, and `task` alongside every
-  vector** — embedding spaces are model-scoped and mixing them degrades retrieval
+  vector** - embedding spaces are model-scoped and mixing them degrades retrieval
   silently.
 - **`ExAgent.Providers.OpenAICompatible`.** One provider for any endpoint speaking the
-  OpenAI chat-completions dialect — self-hosted vLLM (including behind Modal),
+  OpenAI chat-completions dialect - self-hosted vLLM (including behind Modal),
   OpenRouter, Together, Groq. Takes arbitrary `:headers` (so Modal's `Modal-Key` /
   `Modal-Secret` proxy auth works, where `ExAgent.Providers.OpenAI` had no way to set
   them), with `:api_key` as sugar for a bearer header that explicit headers override.
@@ -389,25 +420,25 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
   a live vLLM (Qwen3-VL) deployment, from both an http URL and a base64 data URI.
 - **Gemini upload polling is configurable.** `:poll_interval_ms` and
   `:max_poll_attempts` are now options, defaulting to `2_000` / `60` (~2 minutes, up
-  from ~10 seconds) — large files and video need it.
+  from ~10 seconds) - large files and video need it.
 - **`ExAgent.UploadCache`.** An ETS-backed cache that lets the same bytes reuse an
   existing `ExAgent.FileRef` instead of re-uploading. Entries are keyed by
   `{scope, sha256(bytes)}` where the scope digests the provider module, base URL, and
-  API key — so two accounts never share a file reference, and the key itself is never
+  API key - so two accounts never share a file reference, and the key itself is never
   stored. An expired `FileRef` is treated as a miss and evicted. Added to the
   supervision tree ahead of the agent supervisor; `clear/0` empties it.
 
 ### Fixed
 
 - **A failed turn poisoned the agent.** The user message was committed to context even
-  when the turn failed, so a message the provider had already refused — a rejected
-  attachment, say — was resent on every later turn and every one of them failed. "Fails
+  when the turn failed, so a message the provider had already refused - a rejected
+  attachment, say - was resent on every later turn and every one of them failed. "Fails
   loudly" became "fails forever". A failed turn now leaves no trace, which also stops a
   retry after a transient 429 from duplicating the question in history.
 
 - **`chat_stream/3` raised on a rejected attachment.** The modality gate raises inside
   `ExAgent.Provider.stream/3` because a lazy enumerable has nowhere to carry an error at
-  construction time, and that escaped to the consumer — contradicting the documented
+  construction time, and that escaped to the consumer - contradicting the documented
   promise that streaming never raises, and leaving the agent stuck in `:processing`. It
   now arrives as the terminal `:done` chunk like every other stream failure, and the
   agent is released.
@@ -421,7 +452,7 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
   hardcoded `[:openai, :gemini]`, so a third-party provider implementing the optional
   `c:ExAgent.Provider.upload/4` callback could not build the reference its own callback
   has to return. The built-in services construct `%FileRef{}` structs directly and never
-  called `new/1`, so the closed list protected nothing — it only walled out everyone
+  called `new/1`, so the closed list protected nothing - it only walled out everyone
   else. Any atom is now accepted, and a reference need only carry a `:file_id` or a
   `:file_uri`; OpenAI's and Gemini's specific field requirements still apply to them,
   since their services pattern-match on those fields.
@@ -429,8 +460,8 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
 - **`OpenAICompatible` shaped documents as images.** `:document` was declarable through
   `:modalities` but `format_attachment/1` fell through to `image_url`, so a PDF was sent
   as an image part and the gateway either rejected it or read nothing. Documents now use
-  the dialect's `file` part — `file_data` for bytes (with the required `filename`) and
-  `file_url` for a URL — which is what a gateway fronting a document-reading model
+  the dialect's `file` part - `file_data` for bytes (with the required `filename`) and
+  `file_url` for a URL - which is what a gateway fronting a document-reading model
   expects. The moduledoc previously claimed documents were unsupported; a model behind
   OpenRouter or Modal may well read them, so it is a deployment property like every other
   modality.
@@ -438,7 +469,7 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
 - **Gemini streaming produced no text at all.** Gemini terminates SSE events with CRLF,
   but `ExAgent.SSE.take_events/1` split only on `"\n\n"`. A CRLF stream contains no such
   boundary, so every frame stayed buffered, no frame was ever decoded, and the stream
-  ended with its terminal chunk and empty content — silently, with no error. Framing now
+  ended with its terminal chunk and empty content - silently, with no error. Framing now
   accepts CRLF, LF, and bare CR per the SSE spec, on both event and line boundaries.
   Found by running against the live API; every mocked test hand-wrote LF bodies.
 
@@ -451,12 +482,12 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
 
 - **A tool returning a bare value crashed the tool loop.** `ExAgent.Tool`'s `:function` is
   typed `(map() -> any())` and its own doctest returns a bare `:ok`, but the agent matched
-  only `{:ok, _}` / `{:error, _}` / `{:handoff, _, _}` — anything else raised
+  only `{:ok, _}` / `{:error, _}` / `{:handoff, _, _}` - anything else raised
   `CaseClauseError` inside the supervised task, surfacing as an opaque `:server` error. An
   unwrapped return is now taken as the result.
 
 - **Documented that OpenAI's `:web_search` needs `temperature: nil`.** `web_search_options`
-  is only accepted by a `*-search-preview` model, and those reject `temperature` — so the
+  is only accepted by a `*-search-preview` model, and those reject `temperature` - so the
   provider's own `temperature: 0.6` default made the shipped example return HTTP 400.
   ExAgent still forwards `temperature` as configured rather than dropping it when a model
   objects; a silently ignored sampling parameter is worse than a 400 naming the field.
@@ -479,7 +510,7 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
   and non-streaming share one downstream code path.
 - **`ExAgent.SSE`.** Server-Sent Events framing extracted from the streaming transport
   and made public, with `decode/1` returning complete frames plus the unconsumed
-  remainder. A frame split across TCP reads is reassembled correctly — now covered by a
+  remainder. A frame split across TCP reads is reassembled correctly - now covered by a
   test that splits a body at every byte boundary.
 
 ### Removed (breaking)
@@ -497,7 +528,7 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
         model: "deepseek-reasoner"
       )
 
-  Reasoning traces still arrive as `:thinking_delta` chunks — the `reasoning_content`
+  Reasoning traces still arrive as `:thinking_delta` chunks - the `reasoning_content`
   field is handled by the shared dialect, not by the removed module. The built-in
   `:thinking` tool went with it; pick the reasoner model instead.
 
@@ -515,7 +546,7 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
       # ...or response.message for the Message struct itself
 
   This cascades through the `c:ExAgent.Provider.chat/3` callback, so custom providers
-  must return a `Response` — build one with `ExAgent.Response.new/2`.
+  must return a `Response` - build one with `ExAgent.Response.new/2`.
 - **Streams yield `%ExAgent.Chunk{}` instead of `String.t()`.**
 
       # before
@@ -541,7 +572,7 @@ would observe. `test/ex_agent/regressions_test.exs` now covers each one.
   which was indistinguishable from clean completion.
 
 - **DeepSeek attachments.** Previously `raise`d `ArgumentError` from inside the service
-  (and the README claimed they were silently ignored — neither was right). Attaching a
+  (and the README claimed they were silently ignored - neither was right). Attaching a
   file to DeepSeek now returns `{:error, %ExAgent.Error{type: :unsupported}}` before the
   request is built.
 - **`:path` attachments are read lazily.** `Message.new/1` now records only the file's

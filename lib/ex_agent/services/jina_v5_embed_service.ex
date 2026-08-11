@@ -15,7 +15,7 @@ defmodule ExAgent.Services.JinaV5EmbedService do
        "dimensions": 256, "input_count": 1, "embeddings": [[...]]}
 
   Every rule below was checked against a running deployment, not inferred from a
-  model card — the server rejects unknown fields outright, so guessing is not an
+  model card - the server rejects unknown fields outright, so guessing is not an
   option.
   """
 
@@ -185,7 +185,7 @@ defmodule ExAgent.Services.JinaV5EmbedService do
     end
   end
 
-  # Vectors come back in request order, and the server owns normalization —
+  # Vectors come back in request order, and the server owns normalization -
   # re-normalizing here would silently undo an explicit `normalize: false`.
   @spec build_result(map(), JinaV5.t(), Embeddings.task(), pos_integer() | nil) ::
           {:ok, Embeddings.t()} | {:error, Error.t()}

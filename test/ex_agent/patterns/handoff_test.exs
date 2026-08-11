@@ -25,21 +25,27 @@ defmodule ExAgent.Patterns.HandoffTest do
   end
 
   # Happy path tests
-  describe "build_handoff_tool/3" do
+  describe "tools/1" do
     test "creates a tool with correct name and description" do
-      tool = Handoff.build_handoff_tool("support", self(), "Transfer to support agent")
+      tool =
+        hd(
+          Handoff.tools([
+            %{name: "support", agent: self(), description: "Transfer to support agent"}
+          ])
+        )
+
       assert tool.name == "handoff_to_support"
       assert tool.description == "Transfer to support agent"
     end
 
     test "tool function returns handoff tuple" do
-      tool = Handoff.build_handoff_tool("support", self(), "Transfer")
+      tool = hd(Handoff.tools([%{name: "support", agent: self(), description: "Transfer"}]))
       result = tool.function.(%{"summary" => "User needs billing help"})
       assert {:handoff, _target, %Context{}} = result
     end
 
     test "handoff context includes summary message" do
-      tool = Handoff.build_handoff_tool("support", self(), "Transfer")
+      tool = hd(Handoff.tools([%{name: "support", agent: self(), description: "Transfer"}]))
       {:handoff, _target, context} = tool.function.(%{"summary" => "Billing issue"})
 
       [msg] = context.messages
@@ -75,8 +81,8 @@ defmodule ExAgent.Patterns.HandoffTest do
     end
   end
 
-  # Edge case tests — integration with Agent
-  describe "execute_handoff/2" do
+  # Edge case tests - integration with Agent
+  describe "execute/2" do
     test "sends context to target agent via cast" do
       provider = build_provider(fn conn -> Req.Test.json(conn, success_response("Ok")) end)
       {:ok, target_pid} = Agent.start_link(provider: provider)
@@ -84,7 +90,7 @@ defmodule ExAgent.Patterns.HandoffTest do
       {:ok, msg} = Message.new(role: :system, content: "Handoff context")
       context = Context.new(messages: [msg])
 
-      Handoff.execute_handoff(target_pid, context)
+      Handoff.execute(target_pid, context)
       :timer.sleep(10)
 
       received_context = Agent.get_context(target_pid)
@@ -107,7 +113,7 @@ defmodule ExAgent.Patterns.HandoffTest do
 
       {:ok, sys_msg} = Message.new(role: :system, content: "Handoff: billing issue")
       context = Context.new(messages: [sys_msg])
-      Handoff.execute_handoff(target_pid, context)
+      Handoff.execute(target_pid, context)
       :timer.sleep(10)
 
       {:ok, response} = Agent.chat(target_pid, "What about my refund?")
@@ -151,7 +157,13 @@ defmodule ExAgent.Patterns.HandoffTest do
 
       {:ok, target_pid} = Agent.start_link(provider: target_provider)
 
-      handoff_tool = Handoff.build_handoff_tool("support", target_pid, "Transfer to support")
+      handoff_tool =
+        hd(
+          Handoff.tools([
+            %{name: "support", agent: target_pid, description: "Transfer to support"}
+          ])
+        )
+
       {:ok, agent_pid} = Agent.start_link(provider: provider, tools: [handoff_tool])
 
       result = Agent.chat(agent_pid, "I need support")

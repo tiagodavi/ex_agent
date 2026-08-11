@@ -8,7 +8,7 @@ defmodule ExAgent.Test.FakeSSE do
   chunk"), so a plug stub physically cannot exercise the split-frame
   reassembly path in `ExAgent.Services.Streaming`. This adapter can.
 
-  It drives the real receive loop and the real `Req.parse_message/2` path — only
+  It drives the real receive loop and the real `Req.parse_message/2` path - only
   the socket is replaced.
 
       req = Req.new(adapter: FakeSSE.adapter(["data: {\\"a\\":1}\\n", "\\n"]))
@@ -70,7 +70,7 @@ defmodule ExAgent.Test.FakeSSE do
   end
 
   @doc """
-  Every possible two-way split of a binary — the exhaustive boundary case.
+  Every possible two-way split of a binary - the exhaustive boundary case.
   """
   @spec all_splits(binary()) :: [[binary()]]
   def all_splits(binary) do

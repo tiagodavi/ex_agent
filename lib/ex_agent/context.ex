@@ -58,7 +58,7 @@ defmodule ExAgent.Context do
 
   Conversation history otherwise grows without bound: every turn resends the
   whole transcript, so cost climbs turn over turn until the model returns
-  `:context_length` and the agent is stuck. Trimming is opt-in — silently
+  `:context_length` and the agent is stuck. Trimming is opt-in - silently
   forgetting what a user said is a decision the caller has to make.
 
   Leading `:system` messages are always kept: they carry instructions that must

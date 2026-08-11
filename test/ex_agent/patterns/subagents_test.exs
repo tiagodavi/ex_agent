@@ -54,7 +54,7 @@ defmodule ExAgent.Patterns.SubagentsTest do
       assert {:ok, "Code result"} = Subagents.invoke_subagent(spec, "Write a function")
     end
 
-    test "context is isolated — fresh for each call" do
+    test "context is isolated - fresh for each call" do
       spec =
         build_spec("isolated", fn conn ->
           {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -115,14 +115,14 @@ defmodule ExAgent.Patterns.SubagentsTest do
   end
 
   # Edge case tests
-  describe "build_orchestrator_tools/1" do
+  describe "tools/1" do
     test "converts specs into Tool structs" do
       spec =
         build_spec("researcher", fn conn ->
           Req.Test.json(conn, success_response("Result"))
         end)
 
-      tools = Subagents.build_orchestrator_tools([spec])
+      tools = Subagents.tools([spec])
       assert length(tools) == 1
       [tool] = tools
       assert tool.name == "researcher"
@@ -136,7 +136,7 @@ defmodule ExAgent.Patterns.SubagentsTest do
           Req.Test.json(conn, success_response("Worker result"))
         end)
 
-      [tool] = Subagents.build_orchestrator_tools([spec])
+      [tool] = Subagents.tools([spec])
       assert {:ok, "Worker result"} = tool.function.(%{"query" => "Do work"})
     end
 
@@ -144,13 +144,13 @@ defmodule ExAgent.Patterns.SubagentsTest do
       spec1 = build_spec("a", fn conn -> Req.Test.json(conn, success_response("A")) end)
       spec2 = build_spec("b", fn conn -> Req.Test.json(conn, success_response("B")) end)
 
-      tools = Subagents.build_orchestrator_tools([spec1, spec2])
+      tools = Subagents.tools([spec1, spec2])
       assert length(tools) == 2
       assert Enum.map(tools, & &1.name) == ["a", "b"]
     end
   end
 
-  describe "invoke_subagents_parallel/2" do
+  describe "run/2" do
     test "invokes multiple subagents in parallel and returns results" do
       spec1 =
         build_spec("fast", fn conn -> Req.Test.json(conn, success_response("Fast result")) end)
@@ -158,7 +158,7 @@ defmodule ExAgent.Patterns.SubagentsTest do
       spec2 =
         build_spec("slow", fn conn -> Req.Test.json(conn, success_response("Slow result")) end)
 
-      results = Subagents.invoke_subagents_parallel([{spec1, "query1"}, {spec2, "query2"}])
+      results = Subagents.run([{spec1, "query1"}, {spec2, "query2"}])
 
       assert length(results) == 2
       assert {"fast", {:ok, "Fast result"}} in results

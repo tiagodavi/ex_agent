@@ -3,7 +3,7 @@ defmodule ExAgent.Patterns.Subagents do
   Centralized orchestration pattern.
 
   A main agent invokes specialized subagents as tool calls. Subagents
-  are transient, stateless processes with isolated contexts — they run
+  are transient, stateless processes with isolated contexts - they run
   a single LLM call and return the result without maintaining state.
   """
 
@@ -18,13 +18,13 @@ defmodule ExAgent.Patterns.Subagents do
         }
 
   @doc """
-  Converts subagent specifications into Tool structs for use by an orchestrator agent.
+  Builds one tool per subagent, for an orchestrator agent to call.
 
   Each subagent becomes a tool whose function spawns an ephemeral LLM call.
   The tool's parameters accept a `"query"` string.
   """
-  @spec build_orchestrator_tools([subagent_spec()]) :: [Tool.t()]
-  def build_orchestrator_tools(specs) do
+  @spec tools([subagent_spec()]) :: [Tool.t()]
+  def tools(specs) do
     Enum.map(specs, fn spec ->
       %Tool{
         name: spec.name,
@@ -74,13 +74,13 @@ defmodule ExAgent.Patterns.Subagents do
   end
 
   @doc """
-  Invokes multiple subagents in parallel using Task.async_stream.
+  Invokes several subagents in parallel, each with its own input.
 
   Returns a list of `{spec_name, result}` tuples.
   """
-  @spec invoke_subagents_parallel([{subagent_spec(), String.t()}], keyword()) ::
+  @spec run([{subagent_spec(), String.t()}], keyword()) ::
           [{String.t(), {:ok, String.t()} | {:error, term()}}]
-  def invoke_subagents_parallel(specs_with_inputs, opts \\ []) do
+  def run(specs_with_inputs, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 30_000)
 
     specs_with_inputs

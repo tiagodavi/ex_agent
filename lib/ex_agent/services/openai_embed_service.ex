@@ -3,7 +3,7 @@ defmodule ExAgent.Services.OpenAIEmbedService do
   HTTP service for the OpenAI embeddings API.
 
   OpenAI supports `:dimensions` but has no notion of a task type. A non-nil
-  `:task` is rejected rather than dropped — a silently discarded task produces
+  `:task` is rejected rather than dropped - a silently discarded task produces
   vectors that look fine and retrieve badly.
   """
 
@@ -24,7 +24,7 @@ defmodule ExAgent.Services.OpenAIEmbedService do
   @allowed_args [encoding_format: ["float", "base64"], user: :any]
 
   @doc """
-  Returns the task atoms this service accepts — none.
+  Returns the task atoms this service accepts - none.
   """
   @spec tasks() :: [Embeddings.task()]
   def tasks, do: @tasks

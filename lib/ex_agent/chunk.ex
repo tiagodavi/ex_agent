@@ -21,10 +21,10 @@ defmodule ExAgent.Chunk do
 
   | Type | Carries |
   |------|---------|
-  | `:text_delta` | `:text` — a piece of the assistant's answer |
-  | `:thinking_delta` | `:text` — a piece of the model's reasoning trace |
+  | `:text_delta` | `:text` - a piece of the assistant's answer |
+  | `:thinking_delta` | `:text` - a piece of the model's reasoning trace |
   | `:tool_call_delta` | `:index`, `:id`, `:name`, `:arguments` |
-  | `:usage` | `:usage` — token counts |
+  | `:usage` | `:usage` - token counts |
   | `:done` | `:finish_reason`, and `:error` when the stream failed |
 
   Every stream ends with exactly one `:done` chunk, including when it fails.

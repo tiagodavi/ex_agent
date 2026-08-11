@@ -96,7 +96,7 @@ defmodule ExAgent.Services.OpenAICompatibleService do
   end
 
   # There is no Files API here, so the only decisions are "reference the URL" or
-  # "inline the bytes" — and refusing anything too large to inline, rather than
+  # "inline the bytes" - and refusing anything too large to inline, rather than
   # truncating it or retrying forever.
   @spec prepare_attachments(OpenAICompatible.t(), [Message.t()]) ::
           {:ok, [Message.t()]} | {:error, Error.t()}
@@ -133,7 +133,7 @@ defmodule ExAgent.Services.OpenAICompatibleService do
     Error.new(
       :unsupported,
       "#{attachment.filename || "attachment"} is #{size} bytes, over :max_inline_bytes " <>
-        "(#{provider.max_inline_bytes}). This endpoint has no Files API — host the file " <>
+        "(#{provider.max_inline_bytes}). This endpoint has no Files API - host the file " <>
         "at a URL the container can reach and pass it as %{url: ...}",
       OpenAICompatible
     )
@@ -183,7 +183,7 @@ defmodule ExAgent.Services.OpenAICompatibleService do
     do: "data:#{mime_type};base64,#{Base.encode64(data)}"
 
   # `:fps` / `:max_frames` and any string-keyed `:provider_opts` are merged into
-  # the content part verbatim. Support is model-dependent — vLLM forwards extra
+  # the content part verbatim. Support is model-dependent - vLLM forwards extra
   # fields, but the served model decides whether they mean anything.
   @spec merge_provider_opts(map(), map()) :: map()
   defp merge_provider_opts(part, attachment) do

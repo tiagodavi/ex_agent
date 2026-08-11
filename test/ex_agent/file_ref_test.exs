@@ -67,7 +67,7 @@ defmodule ExAgent.FileRefTest do
   # A third-party provider implementing the optional upload/4 callback has to be
   # able to build the reference its own callback returns. The built-in services
   # construct %FileRef{} structs directly, so a closed provider list here never
-  # protected them — it only walled out everyone else.
+  # protected them - it only walled out everyone else.
   describe "new/1 for custom providers" do
     test "accepts a provider this library has never heard of" do
       assert {:ok, ref} =

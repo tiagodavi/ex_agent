@@ -12,7 +12,7 @@ defmodule ExAgent.Services.OpenAIDialect do
   #
   # Attachment formatting is injected via `:attachment_formatter` because it is
   # the one piece that genuinely differs. Omitting it drops attachments from the
-  # body, which is correct for text-only providers — they reject attachments at
+  # body, which is correct for text-only providers - they reject attachments at
   # the modality gate in `ExAgent.Provider` long before a body is built.
 
   alias ExAgent.{Chunk, Error, Message, Response, Tool}
@@ -74,7 +74,7 @@ defmodule ExAgent.Services.OpenAIDialect do
 
   defp tool_calls(_message), do: []
 
-  # A message with neither content nor tool calls — a bare refusal, say — is an
+  # A message with neither content nor tool calls - a bare refusal, say - is an
   # unparseable shape, not a crash.
   @spec text_response(map(), map(), map(), module()) ::
           {:ok, Response.t()} | {:error, Error.t()}
@@ -106,7 +106,7 @@ defmodule ExAgent.Services.OpenAIDialect do
 
   @doc false
   # Maps one chat-completions stream frame onto chunks. Shared by every dialect
-  # speaker — a compatible endpoint's frames are identical to OpenAI's.
+  # speaker - a compatible endpoint's frames are identical to OpenAI's.
   @spec chunks(map()) :: [Chunk.t()]
   def chunks(%{"choices" => [choice | _]} = frame) do
     delta = Map.get(choice, "delta") || %{}
@@ -215,7 +215,7 @@ defmodule ExAgent.Services.OpenAIDialect do
     %{"role" => to_string(role), "content" => content}
   end
 
-  # The id the API issued, so a tool result correlates back to the right call —
+  # The id the API issued, so a tool result correlates back to the right call -
   # the name is only a fallback for a provider that has none, and it collides as
   # soon as the model calls one tool twice in a turn.
   @spec format_tool_call(map()) :: map()

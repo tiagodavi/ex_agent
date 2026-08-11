@@ -3,7 +3,7 @@ defmodule ExAgent.Services.EmbedArgs do
 
   # Validation plumbing for the `:task` and `:args` embedding options.
   #
-  # The *vocabularies* live in each provider's service — Gemini's `taskType` enum
+  # The *vocabularies* live in each provider's service - Gemini's `taskType` enum
   # and Jina v5's four task names have nothing in common, and pretending
   # otherwise is what the shared task map used to get wrong. What is genuinely
   # identical is the shape of the check and the wording of the failure, so only

@@ -348,7 +348,7 @@ defmodule ExAgent.Agent do
 
   # Private Functions
 
-  # A malformed attachment must not crash the agent mid-handle_call — it is
+  # A malformed attachment must not crash the agent mid-handle_call - it is
   # caller input, so it comes back as an error like any other bad request.
   @spec build_user_message(String.t(), keyword()) ::
           {:ok, Message.t()} | {:error, ExAgent.Error.t()}
@@ -371,7 +371,7 @@ defmodule ExAgent.Agent do
   end
 
   # A turn either completes or it did not happen. Committing a failed turn left a
-  # message the provider had already refused — a rejected attachment, say — in
+  # message the provider had already refused - a rejected attachment, say - in
   # history to be resent on every later turn, breaking the agent permanently; and
   # it duplicated the question when the caller retried a transient failure.
   defp handle_loop_result({:error, reason, _loop_state}, state) do
@@ -415,7 +415,7 @@ defmodule ExAgent.Agent do
   end
 
   # A turn can request several tools at once. Each result is appended before the
-  # next call runs, so the provider sees one response per call — a model that
+  # next call runs, so the provider sees one response per call - a model that
   # asked for three and got one back would re-request the missing two forever.
   @spec run_tool_calls([map()], state(), keyword(), non_neg_integer(), [Tool.t()]) ::
           {:ok, ExAgent.Response.t(), state()}
@@ -485,7 +485,7 @@ defmodule ExAgent.Agent do
   # Streams every turn, resolving tool calls between them.
   #
   # The previous shape ran the whole tool loop *non-streamed* and then threw the
-  # finished answer away to regenerate it as a stream — two full completions for
+  # finished answer away to regenerate it as a stream - two full completions for
   # every streamed turn with tools configured. Here each turn is streamed once:
   # a turn that ends in tool calls has its `:done` swallowed, its tools run, and
   # the next turn opened, so the consumer still sees exactly one terminal chunk.
@@ -683,7 +683,7 @@ defmodule ExAgent.Agent do
   defp normalize_tool_result(other), do: {:ok, other}
 
   # Services read tools off the provider struct, so the agent populates the field
-  # — but only when the provider declares one. A provider with no tool support
+  # - but only when the provider declares one. A provider with no tool support
   # has no reason to carry it, and a KeyError surfacing as an opaque :server
   # error is a poor way to say so.
   @spec with_tools(struct(), [Tool.t()]) :: struct()
@@ -705,7 +705,7 @@ defmodule ExAgent.Agent do
   defp evaluate_and_apply_skills(%{skills: []} = state), do: state
 
   defp evaluate_and_apply_skills(state) do
-    case SkillsPattern.evaluate_skills(state.skills, state.context) do
+    case SkillsPattern.evaluate(state.skills, state.context) do
       nil -> SkillsPattern.clear_skill(state)
       %Skill{} = skill -> SkillsPattern.apply_skill(state, skill)
     end

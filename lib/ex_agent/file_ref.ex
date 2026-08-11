@@ -114,7 +114,7 @@ defmodule ExAgent.FileRef do
   end
 
   # Whichever identifier a custom provider's API uses, a reference has to carry
-  # one — that is the only rule this struct can state without knowing the API.
+  # one - that is the only rule this struct can state without knowing the API.
   defp validate_provider_fields(_provider, attrs) do
     if present?(attrs[:file_id]) or present?(attrs[:file_uri]),
       do: :ok,
