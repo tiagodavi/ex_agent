@@ -40,6 +40,7 @@ defmodule ExAgent.MixProject do
           ExAgent.Providers.Gemini,
           ExAgent.Providers.OpenAICompatible,
           ExAgent.Providers.JinaV5,
+          ExAgent.Providers.JinaRerankerM0,
           ExAgent.Roles
         ],
         Conversations: [
@@ -60,11 +61,16 @@ defmodule ExAgent.MixProject do
           ExAgent.UploadCache
         ],
         Embeddings: [ExAgent.Embeddings],
+        Reranking: [ExAgent.Reranking],
         "Multi-agent patterns": [
+          ExAgent.Patterns.Chain,
+          ExAgent.Patterns.Router,
           ExAgent.Patterns.Subagents,
-          ExAgent.Patterns.Skills,
           ExAgent.Patterns.Handoff,
-          ExAgent.Patterns.Router
+          ExAgent.Patterns.Skills,
+          ExAgent.Patterns.Reflection,
+          ExAgent.Patterns.MapReduce,
+          ExAgent.Patterns.Consensus
         ],
         Internals: [
           ExAgent.SSE,

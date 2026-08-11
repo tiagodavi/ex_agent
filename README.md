@@ -10,10 +10,12 @@ any OpenAI-compatible endpoint; OTP primitives orchestrate them.
 - **Structured streaming** — text, reasoning, tool-call deltas, usage as typed chunks
 - **Automatic tool execution** — define a tool once; the agent loops until done
 - **Multimodal** — images, PDFs, video, audio from a path, bytes, a URL, or an upload
-- **Embeddings for RAG** — each provider's own task vocabulary, provenance on every result
+- **Embeddings and reranking for RAG** — each provider's own task vocabulary, provenance on
+  every result, cross-encoder reranking for the shortlist
 - **Normalized errors** — one `%ExAgent.Error{}` with a `retryable?` flag
 - **Fails loudly** — unsupported input is rejected before a request is built, never dropped
-- **4 multi-agent patterns** — Subagents, Skills, Handoffs, Router
+- **8 agent architectures** — Chain, Router, Subagents, Handoff, Skills, Reflection,
+  MapReduce, Consensus, with a guide to picking one
 
 ## Install
 
@@ -42,8 +44,8 @@ response.content   #=> "Elixir is a functional programming language..."
 | [Providers](#providers) · [Roles](#roles) | Configure who answers |
 | [Agents](#agents) · [Tools](#tools) · [Streaming](#streaming) | Run a conversation |
 | [Attachments](#attachments) · [Uploads](#uploads) | Send files |
-| [Embeddings](#embeddings) · [Jina v5](#jina-v5) | RAG |
-| [Patterns](#multi-agent-patterns) | Subagents, Skills, Handoffs, Router |
+| [Embeddings](#embeddings) · [Jina v5](#jina-v5) · [Reranking](#reranking) | RAG |
+| [Patterns](#multi-agent-patterns) | Which one do I want? · 8 architectures compared |
 | [Observability](#observability) | Telemetry events |
 | [Recipes](#recipes) | Retry, RAG, multi-tenant, LiveView, testing |
 | [Custom providers](#custom-providers) · [Architecture](#architecture) · [Testing](#testing) | Extend |
@@ -767,7 +769,265 @@ An unrecognized Gemini embedding model **errors rather than guessing** — sendi
 your index and retrieve worse forever. Use `:embedding_family` (`:task_type` or `:prefix`)
 to adopt a model this version predates.
 
+## Reranking
+
+Retrieval's second stage. Embeddings compare vectors computed independently, which is what
+makes searching a corpus feasible; a **cross-encoder** reads the query and one document
+together — far more accurate, and far too slow to run over everything.
+
+```elixir
+reranker = ExAgent.Providers.JinaRerankerM0.new(base_url: System.fetch_env!("RERANKER_URL"))
+
+# Stage 1: embeddings fetch a shortlist of ~100
+shortlist = vector_search(query_vector, limit: 100)
+
+# Stage 2: the reranker orders the ~10 that go in the prompt
+{:ok, ranked} = ExAgent.rerank(reranker, question, Enum.map(shortlist, & &1.text), top_n: 10)
+```
+
+`:index` is the contract — it points back into the list you passed, so it works for records,
+not just strings:
+
+```elixir
+Enum.map(ranked.results, fn %{index: i, score: score} -> {Enum.at(shortlist, i), score} end)
+
+ExAgent.Reranking.take(ranked, texts)        # ranked texts, when that is all you need
+ExAgent.Reranking.above(ranked, 0.5).results # decline to answer instead of guessing
+```
+
+`:document` is nil unless you pass `return_documents: true` — sending a corpus back to have
+it re-quoted is waste when the index already identifies it.
+
+Behind Modal's proxy auth:
+
+```elixir
+ExAgent.Providers.JinaRerankerM0.new(
+  base_url: System.fetch_env!("MODAL_RERANKER_URL"),
+  api_key: System.fetch_env!("MODAL_API_KEY"),
+  headers: [
+    {"Modal-Key", System.fetch_env!("MODAL_KEY")},
+    {"Modal-Secret", System.fetch_env!("MODAL_SECRET")}
+  ]
+)
+```
+
+> #### Scores do not port between models {: .warning}
+>
+> Higher is more relevant — that is the only guarantee. `jina-reranker-m0` emits roughly
+> 0–1 while other cross-encoders emit unbounded logits, so compare **within** one result
+> set and calibrate any threshold against your own data. Store `:model` next to anything you
+> persist, for the same reason embeddings do.
+
+Ranking always returns something: the best of an entirely irrelevant set still sorts first.
+`above/2` is how you decline rather than feed the model the least-irrelevant chunk.
+
+Batches are capped at 512 documents — the shape of the intended use. A provider without a
+reranking endpoint returns `{:error, %ExAgent.Error{type: :unsupported}}`.
+
 ## Multi-agent patterns
+
+Eight patterns, and the hard part is picking one. Start here.
+
+### Which one do I want?
+
+Think of it as staffing a small team.
+
+| Pattern | The analogy | Reach for it when |
+|---|---|---|
+| **Chain** | An assembly line | You already know the steps, in order |
+| **Router** | A receptionist | The *input* decides who should handle it |
+| **Subagents** | A manager with specialists | The steps depend on what the model finds |
+| **Handoff** | Transferring a phone call | One agent should take over the conversation |
+| **Skills** | One person changing hats | Same conversation, different expertise needed |
+| **Reflection** | A writer and an editor | Quality matters and you can say what "good" is |
+| **MapReduce** | Colleagues splitting a report | The input is too big to read at once |
+| **Consensus** | Getting a second opinion | Being *wrong* is expensive |
+
+The two questions that settle most cases:
+
+**1. Who decides the order — you or the model?**
+You do → **Chain**. The input does → **Router**. The model does → **Subagents**.
+
+**2. Does the work come back to you, or leave?**
+Subagents report back to the orchestrator, which stays in charge. A Handoff *gives
+the conversation away* — the new agent talks to the user directly and the old one
+is done. If you find yourself asking "who is the user talking to now?", you want
+Handoff. If the answer should always be "the same agent", you want Subagents.
+
+### Handoff vs Subagents, concretely
+
+Both involve more than one agent, and they are the pair people mix up most.
+
+A support bot decides a refund is needed:
+
+```elixir
+# SUBAGENT — the support bot asks a refund specialist a question and keeps talking
+# to the customer. The customer never knows another model was involved.
+tools = Subagents.build_orchestrator_tools([
+  %{name: "check_refund_policy", description: "Check whether an order qualifies",
+    provider: policy_provider, system_prompt: "You know the refund policy.", tools: []}
+])
+{:ok, bot} = ExAgent.start_agent(provider: provider, tools: tools)
+
+# HANDOFF — the support bot steps aside; billing owns the conversation from here,
+# with the history so far.
+tools = [Handoff.build_handoff_tool("billing", billing_agent, "Transfer billing questions")]
+{:ok, bot} = ExAgent.start_agent(provider: provider, tools: tools)
+{:handoff, target, context} = ExAgent.chat(bot, "I want a refund")
+ExAgent.handoff(target, context)   # you decide to allow it
+```
+
+The difference is who answers next. A subagent is a *lookup*; a handoff is a
+*transfer*. Note that handoff hands you the tuple rather than moving control
+itself — routing users between agents is a decision your application owns.
+
+### Skills vs Subagents
+
+Skills change the agent you already have; subagents add another one. Prefer Skills
+when the conversation should stay continuous — the customer is mid-sentence and now
+needs SQL help, and starting a fresh context would lose everything they said.
+Prefer Subagents when the work is genuinely separate and you *want* the isolation,
+because a specialist with 200 lines of instructions should not pollute the main
+context.
+
+### Reflection vs Consensus
+
+Both buy you quality; they fix different failure modes.
+
+Reflection fixes work that is *sloppy* — one draft, reviewed and revised. Consensus
+fixes work that is *wrong* — several independent attempts, compared. A critic
+re-reading one draft is easily talked into agreeing with it, so reflection will not
+save you from a confidently wrong fact. Use Reflection for prose and code, Consensus
+for decisions and extracted values.
+
+---
+
+### Chain — fixed sequence
+
+```elixir
+alias ExAgent.Patterns.Chain
+
+{:ok, checklist} =
+  Chain.run(transcript,
+    steps: [
+      Chain.llm(provider, &"Extract the action items:\n\n#{&1}"),
+      Chain.llm(provider, &"Rewrite as a markdown checklist:\n\n#{&1}")
+    ]
+  )
+```
+
+Each step is a function returning `{:ok, next}`, `{:error, reason}`, or
+`{:halt, value}`. Plain functions work as steps too, so validation, parsing, and
+database lookups sit in the line alongside the LLM calls:
+
+```elixir
+Chain.run(ticket,
+  steps: [
+    Chain.llm(triage, &"Is this a bug report? Answer YES or NO.\n\n#{&1}"),
+    fn answer -> if answer =~ "YES", do: {:ok, ticket}, else: {:halt, :not_a_bug} end,
+    Chain.llm(engineer, &"Suggest a fix:\n\n#{&1}")
+  ]
+)
+#=> {:halted, :not_a_bug}   — the third call was never paid for
+```
+
+`{:halt, _}` is not an error; it is how you decline to spend the rest of the calls.
+It is also where a human belongs: halt with `:needs_approval`, park the work, and
+run a second chain once someone signs off.
+
+Failures name the step index — `{:error, {1, reason}}` — because "step 2 of 5"
+is the first thing you want to know.
+
+### Reflection — draft, critique, revise
+
+```elixir
+alias ExAgent.Patterns.Reflection
+
+{:ok, result} =
+  Reflection.run("Write a Postgres query for monthly active users.",
+    generator: coder,
+    critic: reviewer,
+    accept?: &String.contains?(&1, "APPROVED"),
+    max_rounds: 3
+  )
+
+result.output      # the accepted answer
+result.rounds      # how many revisions it took
+result.critiques   # what the reviewer said each round
+```
+
+Two guardrails, both deliberate. `max_rounds` is a hard ceiling, because an LLM
+critic can always find something to complain about and an unbounded loop is a
+runaway bill. And when the ceiling is hit without approval you get
+**`{:max_rounds, result}`**, not `{:ok, result}` — the last draft is there, often
+good enough, but you have to *choose* to use unapproved work:
+
+```elixir
+case Reflection.run(task, generator: coder, critic: reviewer) do
+  {:ok, result} -> ship(result.output)
+  {:max_rounds, result} -> queue_for_human(result.output, result.critiques)
+  {:error, reason} -> Logger.error(inspect(reason))
+end
+```
+
+Omit `:critic` and the generator reviews itself — cheaper, and a weaker check.
+
+### MapReduce — split, process in parallel, combine
+
+```elixir
+alias ExAgent.Patterns.MapReduce
+
+{:ok, result} =
+  MapReduce.run(chapters, worker,
+    map: &"Summarise this chapter in three bullets:\n\n#{&1}",
+    reduce: {editor, fn parts -> "Merge into one summary:\n\n" <> Enum.join(parts, "\n---\n") end}
+  )
+
+result.output     # the merged summary
+result.sections   # how many pieces made it in
+result.failures   # [{index, reason}] for those that did not
+```
+
+`reduce:` takes either `{target, prompt_builder}` to let a model combine, or a
+plain function for code. One failing section does not fail the run — the reducer
+sees what survived, and `:failures` tells you what was missing. A summary built
+from 38 of 40 interviews is usually worth having, but never worth mistaking for
+all 40.
+
+The catch: sections are processed independently, so anything spanning a boundary
+is invisible — a clause on page 40 that contradicts page 7. Overlap your sections,
+or make the reduce prompt hunt for conflicts.
+
+### Consensus — ask several times, compare
+
+```elixir
+alias ExAgent.Patterns.Consensus
+
+{:ok, verdict} =
+  Consensus.run("Is this email phishing? Answer YES or NO.\n\n" <> body,
+    voters: [gpt, gemini, local_llama]   # or one provider + samples: 5
+  )
+
+verdict.answer      # "yes"
+verdict.agreement   # 0.67 — two of three
+verdict.votes       # %{"yes" => 2, "no" => 1}
+```
+
+The disagreement is as useful as the answer. A low `:agreement` is your cue to
+escalate rather than proceed:
+
+```elixir
+case Consensus.run(question, voters: provider, samples: 5) do
+  {:ok, %{agreement: agreement} = verdict} when agreement >= 0.8 -> {:auto, verdict.answer}
+  {:ok, verdict} -> {:needs_review, verdict}
+end
+```
+
+Different voters beat repeated voters — models fail differently, whereas one model
+at `temperature: 0` will just sell you the same answer five times. Votes are
+counted on trimmed, downcased strings; pass `:normalize` for anything looser. Long
+prose does not vote: two summaries are never identical, so everything ties at
+`1/n`.
 
 ### Subagents — centralized orchestration
 
@@ -939,10 +1199,18 @@ Repo.insert_all(Chunk, rows)
 {:ok, q} = ExAgent.embed(embedder, question, task: :retrieval, args: [prompt_name: :query])
 [qv] = q.vectors
 
-context =
+# Vector search fetches a shortlist; the reranker orders what actually goes in the prompt.
+shortlist =
   rows
   |> Enum.sort_by(&ExAgent.Embeddings.cosine_similarity(&1.embedding, qv), :desc)
-  |> Enum.take(5)
+  |> Enum.take(50)
+
+{:ok, ranked} =
+  ExAgent.rerank(ExAgent.provider!(:reranker), question, Enum.map(shortlist, & &1.text),
+    top_n: 5
+  )
+
+context = Enum.map(ranked.results, fn %{index: i} -> Enum.at(shortlist, i) end)
   |> Enum.map_join("\n\n", & &1.text)
 
 {:ok, agent} = ExAgent.start_agent(role: :chat)

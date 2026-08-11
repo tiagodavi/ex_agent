@@ -111,6 +111,22 @@ defmodule ExAgent.Provider do
               {:ok, ExAgent.Embeddings.t()} | {:error, ExAgent.Error.t()}
 
   @doc """
+  Reorders `documents` by relevance to `query`.
+
+  Optional — providers without a reranking endpoint omit this callback.
+
+  A reranker is a *cross-encoder*: it reads the query and one document together
+  rather than comparing independently-computed vectors, which is why it is
+  accurate enough to order a shortlist and too slow to search a corpus.
+  """
+  @callback rerank(
+              provider :: struct(),
+              query :: String.t(),
+              documents :: [String.t()],
+              keyword()
+            ) :: {:ok, ExAgent.Reranking.t()} | {:error, ExAgent.Error.t()}
+
+  @doc """
   Returns the embedding task atoms this provider accepts.
 
   Optional — providers with no task field return `[]`.
@@ -126,7 +142,8 @@ defmodule ExAgent.Provider do
                       stream: 3,
                       supported_modalities: 1,
                       embed: 3,
-                      embedding_tasks: 1
+                      embedding_tasks: 1,
+                      rerank: 4
 
   @doc """
   Returns the attachment modalities the provider accepts.
@@ -211,6 +228,28 @@ defmodule ExAgent.Provider do
       mod.stream(provider, messages, opts)
     else
       raise ExAgent.Error.new(:unsupported, "#{inspect(mod)} does not support streaming", mod)
+    end
+  end
+
+  @doc """
+  Dispatches a rerank request to the provider's implementation.
+
+  Returns `{:error, %ExAgent.Error{type: :unsupported}}` if the provider does not
+  implement `rerank/4`.
+  """
+  @spec rerank(struct(), String.t(), [String.t()], keyword()) ::
+          {:ok, ExAgent.Reranking.t()} | {:error, ExAgent.Error.t()}
+  def rerank(provider, query, documents, opts \\ []) do
+    mod = provider.__struct__
+
+    if function_exported?(mod, :rerank, 4) do
+      ExAgent.Telemetry.span(
+        [:rerank],
+        %{provider: mod, document_count: length(documents)},
+        fn -> mod.rerank(provider, query, documents, opts) end
+      )
+    else
+      {:error, ExAgent.Error.new(:unsupported, "#{inspect(mod)} does not support reranking", mod)}
     end
   end
 

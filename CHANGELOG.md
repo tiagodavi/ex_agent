@@ -30,6 +30,95 @@
 
 ### Added
 
+- **Four workflow patterns**, filling the gaps against the commonly documented
+  catalogue (Anthropic's prompt chaining / routing / parallelization /
+  orchestrator-workers / evaluator-optimizer, plus the sequential-workflow and
+  reflection patterns that show up in every 2026 survey). ExAgent already had
+  routing, orchestrator-workers, peer transfer, progressive disclosure, and the
+  ReAct-style tool loop; these are the rest:
+
+  - **`ExAgent.Patterns.Chain`** — a fixed sequence of steps, each working on the
+    last one's output. Steps are plain functions, so validation, parsing, and
+    database lookups sit in the line beside the LLM calls; `Chain.llm/2` builds an
+    LLM step. A step returning `{:halt, value}` stops the line *without* it being a
+    failure, which is how you decline to spend the remaining calls — and where a
+    human approval gate belongs. Errors carry the failing step's index.
+
+  - **`ExAgent.Patterns.Reflection`** — the evaluator-optimizer loop: draft,
+    critique, revise, until the critic accepts or `max_rounds` (default 3) runs out.
+    Exhausting the ceiling returns **`{:max_rounds, result}`**, not `{:ok, result}`:
+    the last draft is there, but using unreviewed work has to be a choice rather
+    than something handed over as if a reviewer had passed it. An LLM critic can
+    always find something to complain about, so the ceiling is the difference
+    between a workflow and a runaway bill.
+
+  - **`ExAgent.Patterns.MapReduce`** — parallelization by sectioning: split an
+    oversized input, process the pieces concurrently, combine them with either a
+    function or another model (`reduce: {target, prompt_builder}`). One failing
+    section does not fail the run; the reducer sees what survived and `:failures`
+    reports the rest, because a summary of 38 of 40 interviews is worth having but
+    not worth mistaking for all 40.
+
+  - **`ExAgent.Patterns.Consensus`** — parallelization by voting: ask several times
+    (or several models) and go with the answer that recurs. `:agreement` is the
+    winner's share, which is the actual product — a low number is the signal to
+    escalate rather than proceed. Ties resolve to the earliest answer
+    deterministically, which needs care because `Enum.frequencies/1` returns a map
+    and a map has no insertion order to fall back on.
+
+  All four accept either a provider struct (stateless, no process) or a running
+  agent (remembers the conversation) wherever they take a target — previously
+  `Router` took only agents and `Subagents` only provider structs, and neither
+  could be handed the other.
+
+  Deliberately **not** added: plan-and-execute, which needs an LLM-authored plan
+  parsed into executable steps and is brittle in exactly the way the rest of this
+  library tries not to be — compose it from `Chain` and `Subagents` instead; and
+  blackboard/swarm topologies, which the production write-ups consistently report
+  losing to hierarchical and graph shapes.
+
+### Changed
+
+- The README's pattern section is now a **guide to choosing one**, not a feature
+  list: analogies for all eight, a table keyed on when to reach for each, and
+  worked comparisons of the pairs people conflate — Handoff vs Subagents (a lookup
+  versus a transfer, settled by "who is the user talking to now?"), Skills vs
+  Subagents (continuity versus isolation), and Reflection vs Consensus (sloppy work
+  versus wrong work).
+
+- **Reranking.** `ExAgent.rerank/4` and `ExAgent.rerank_with/4`, backed by a new optional
+  `c:ExAgent.Provider.rerank/4` callback, returning an `ExAgent.Reranking` struct. Retrieval's
+  second stage: embeddings compare independently computed vectors, which is what makes
+  searching a corpus feasible, while a cross-encoder reads the query and one document
+  together — more accurate, and far too slow to run over everything.
+
+  `:index` is the contract, pointing back into the list you passed, so results map onto your
+  own records without the server echoing text back. `ExAgent.Reranking.take/2` reorders a
+  list; `above/2` applies a relevance floor, because ranking always returns *something* —
+  the best of an irrelevant set still sorts first, and a floor is how you decline to answer.
+  Scores are model-scoped: higher is more relevant and that is the only guarantee.
+
+  Providers without a reranking endpoint return
+  `{:error, %ExAgent.Error{type: :unsupported}}`. Emits
+  `[:ex_agent, :rerank, :start | :stop | :exception]` telemetry.
+
+- **`ExAgent.Providers.JinaRerankerM0`** — a reranking-only provider for a self-hosted
+  `jina-reranker-m0` server. `chat/3` returns `:unsupported`, and there is no `embed/3`: a
+  reranker scores query/document *pairs* and has no single-text vector to give.
+
+  `:base_url` is required and takes bearer auth plus arbitrary `:headers`, so Modal's proxy
+  auth works. Empty document lists, non-string documents, batches over 512, a blank query,
+  a non-positive `:top_n`, and unrecognized options are all rejected before the request —
+  the server rejects unknown body fields outright, so a typo has to be caught client-side or
+  it comes back as a validation blob.
+
+  The wire contract — `POST {base_url}/v1/rerank` with `query`/`documents`/`top_n`/
+  `return_documents`, answering `results` with `relevance_score` and `document.text` — was
+  verified against a live deployment. `return_documents` defaults to `true` there and
+  `false` here, since `:index` already identifies each document. This is **not** the shape of
+  Jina's hosted `api.jina.ai/v1/rerank`, whose `documents` take `{"text": ...}` /
+  `{"image": ...}` objects.
+
 - **`ExAgent.Providers.JinaV5`** — an embeddings-only provider for a self-hosted Jina
   embeddings v5 server, with v5's own tasks: `:retrieval`, `:text_matching`, `:clustering`,
   `:classification`. v5 moved the query/document distinction *out* of the task and into a

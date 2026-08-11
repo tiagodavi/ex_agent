@@ -37,6 +37,11 @@ defmodule ExAgent.LiveApiTest do
       export EX_AGENT_JINA_API_KEY=...                                 # optional, bearer
       export EX_AGENT_JINA_HEADERS='Modal-Key: k, Modal-Secret: s'     # optional
 
+      # jina-reranker-m0 server (see ExAgent.Providers.JinaRerankerM0)
+      export EX_AGENT_RERANK_BASE_URL=https://your-reranker-app.modal.run
+      export EX_AGENT_RERANK_API_KEY=...                               # optional, bearer
+      export EX_AGENT_RERANK_HEADERS='Modal-Key: k, Modal-Secret: s'   # optional
+
   ## Optional extras
 
       # exercises URL attachments; must be publicly reachable by the provider.
@@ -51,9 +56,21 @@ defmodule ExAgent.LiveApiTest do
 
   use ExUnit.Case, async: false
 
-  alias ExAgent.{Chunk, Embeddings, Error, Message, Provider, Response, Roles, Skill, Tool}
+  alias ExAgent.{
+    Chunk,
+    Embeddings,
+    Error,
+    Message,
+    Provider,
+    Reranking,
+    Response,
+    Roles,
+    Skill,
+    Tool
+  }
+
   alias ExAgent.Patterns.Subagents
-  alias ExAgent.Providers.{Gemini, JinaV5, OpenAI, OpenAICompatible}
+  alias ExAgent.Providers.{Gemini, JinaRerankerM0, JinaV5, OpenAI, OpenAICompatible}
 
   @moduletag :external
   # Real models think slowly; a streamed reasoning turn can take minutes.
@@ -70,6 +87,9 @@ defmodule ExAgent.LiveApiTest do
   @jina_base_url System.get_env("EX_AGENT_JINA_BASE_URL")
   @jina_key System.get_env("EX_AGENT_JINA_API_KEY")
   @jina_headers System.get_env("EX_AGENT_JINA_HEADERS")
+  @rerank_base_url System.get_env("EX_AGENT_RERANK_BASE_URL")
+  @rerank_key System.get_env("EX_AGENT_RERANK_API_KEY")
+  @rerank_headers System.get_env("EX_AGENT_RERANK_HEADERS")
 
   @image_url System.get_env("EX_AGENT_TEST_IMAGE_URL")
   @image_mime System.get_env("EX_AGENT_TEST_IMAGE_MIME")
@@ -91,6 +111,7 @@ defmodule ExAgent.LiveApiTest do
   @skip_video_url !@video_url && "EX_AGENT_TEST_VIDEO_URL is not set"
 
   @skip_jina !@jina_base_url && "EX_AGENT_JINA_BASE_URL is not set"
+  @skip_rerank !@rerank_base_url && "EX_AGENT_RERANK_BASE_URL is not set"
 
   # `||` short-circuits while the module is being compiled, which would leave the
   # later attribute looking unread; taking the first truthy entry of a list reads
@@ -219,6 +240,14 @@ defmodule ExAgent.LiveApiTest do
         ],
         opts
       )
+    )
+  end
+
+  defp reranker do
+    JinaRerankerM0.new(
+      base_url: @rerank_base_url,
+      api_key: @rerank_key,
+      headers: parse_headers(@rerank_headers)
     )
   end
 
@@ -1055,6 +1084,143 @@ defmodule ExAgent.LiveApiTest do
       assert {:error, %Error{type: :unsupported} = error} = Provider.chat(jina(), [message])
 
       assert error.message =~ "embeddings model"
+    end
+  end
+
+  # A reranker is the only component here whose *output quality* is checkable
+  # cheaply: given one obviously relevant document among obviously irrelevant
+  # ones, the relevant one must win. That makes these tests a smoke test of the
+  # deployment as much as of the client.
+  describe "JinaRerankerM0 · reranking" do
+    @describetag :rerank
+    @describetag skip: @skip_rerank
+
+    @espresso "For espresso, use a fine grind. A double shot is 18 to 20 grams of coffee " <>
+                "yielding 36 to 40 grams of liquid in 25 to 30 seconds."
+    @baroque "The Baroque period in music spanned roughly 1600 to 1750 and featured " <>
+               "composers such as Bach, Handel and Vivaldi."
+    @bananas "Bananas are a tropical fruit rich in potassium and vitamin B6, typically " <>
+               "harvested green and ripened in transit."
+
+    test "returns one scored entry per document, ordered best first" do
+      documents = [@baroque, @espresso, @bananas]
+
+      assert {:ok, %Reranking{} = result} =
+               ExAgent.rerank(reranker(), "What grind size and dose for espresso?", documents)
+
+      assert length(result.results) == 3
+      assert result.provider == JinaRerankerM0
+      assert result.model =~ "reranker"
+
+      scores = Enum.map(result.results, & &1.score)
+      assert scores == Enum.sort(scores, :desc), "results must arrive ordered"
+
+      indexes = result.results |> Enum.map(& &1.index) |> Enum.sort()
+      assert indexes == [0, 1, 2], "every document must be scored exactly once"
+    end
+
+    test "top_n truncates the result set" do
+      documents = [@baroque, @espresso, @bananas]
+
+      assert {:ok, result} = ExAgent.rerank(reranker(), "espresso dose", documents, top_n: 1)
+
+      assert length(result.results) == 1
+    end
+
+    test "return_documents echoes the text back" do
+      assert {:ok, result} =
+               ExAgent.rerank(reranker(), "espresso", [@espresso, @bananas],
+                 return_documents: true
+               )
+
+      assert Enum.all?(result.results, &is_binary(&1.document))
+    end
+
+    # The server 500s on a single-document request even though its own schema
+    # allows `minItems: 1` (see the deployment-health section). What is being
+    # asserted here is only that the client turns that into a normalized,
+    # retryable error rather than crashing.
+    test "a server failure arrives as a normalized retryable error" do
+      case ExAgent.rerank(reranker(), "espresso", [@espresso]) do
+        {:ok, %Reranking{}} ->
+          :ok
+
+        {:error, %Error{} = error} ->
+          assert error.type in [:server, :invalid_request]
+          assert error.status == 500 or is_nil(error.status)
+      end
+    end
+
+    test "chat is unsupported, with a message that points elsewhere" do
+      {:ok, message} = Message.new(role: :user, content: "hi")
+
+      assert {:error, %Error{type: :unsupported} = error} = Provider.chat(reranker(), [message])
+
+      assert error.message =~ "reranking model"
+    end
+  end
+
+  # These do not test ExAgent. They test whether the deployment behind
+  # EX_AGENT_RERANK_BASE_URL is fit for retrieval at all, which is worth knowing
+  # because a broken reranker degrades answers silently — it still returns a
+  # confident-looking ordering.
+  describe "JinaRerankerM0 · deployment health" do
+    @describetag :rerank
+    @describetag skip: @skip_rerank
+
+    test "scores are stable across identical requests" do
+      # A cross-encoder is deterministic: the same pair must score the same twice.
+      # Drift here means the server is mis-pairing queries with documents, which
+      # shows up as nonsense ranking rather than as an error.
+      documents = [@baroque, @espresso, @bananas]
+      query = "What grind size and dose for espresso?"
+
+      assert {:ok, first} = ExAgent.rerank(reranker(), query, documents)
+      assert {:ok, second} = ExAgent.rerank(reranker(), query, documents)
+
+      assert Enum.map(first.results, & &1.index) == Enum.map(second.results, & &1.index),
+             """
+             identical requests produced different orderings:
+               #{inspect(Enum.map(first.results, &{&1.index, &1.score}))}
+               #{inspect(Enum.map(second.results, &{&1.index, &1.score}))}
+             """
+    end
+
+    # The sharpest available check, and domain-neutral: a reranker exists to beat
+    # keyword matching, so the answer must outrank a document that merely repeats
+    # the query's key word.
+    test "a real answer outranks a document that just repeats the query's keyword" do
+      answer =
+        "The Moon exerts a gravitational pull on Earth's oceans, producing the " <>
+          "twice-daily rise and fall of sea level."
+
+      decoy =
+        "Tides of change swept through the fashion industry during the 1960s, " <>
+          "when hemlines rose sharply."
+
+      documents = [answer, decoy, @bananas]
+
+      assert {:ok, result} = ExAgent.rerank(reranker(), "What causes the tides?", documents)
+
+      ranking = Enum.map(result.results, &{&1.index, &1.score})
+
+      assert %{index: 0} = hd(result.results),
+             """
+             the answer (index 0) did not outrank the keyword decoy: #{inspect(ranking)}
+
+             This is the one thing a reranker must do that embeddings cannot. Scores
+             also sit far below the model card's examples (0.44-0.99), and the
+             ordering does not improve when the answer is made near-verbatim — which
+             points at the served weights rather than at the query.
+             """
+    end
+
+    test "a single document is scored rather than crashing the server" do
+      # The endpoint's own schema declares `documents` as minItems: 1, so this is
+      # a legal request. It returns HTTP 500.
+      assert {:ok, %Reranking{results: [_one]}} =
+               ExAgent.rerank(reranker(), "espresso", [@espresso]),
+             "a one-document rerank should score that document, not fail"
     end
   end
 

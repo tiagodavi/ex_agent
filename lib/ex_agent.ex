@@ -55,6 +55,13 @@ defmodule ExAgent do
       {:ok, docs} =
         ExAgent.embed(jina, chunks, task: :retrieval, args: [prompt_name: :document])
 
+  ## Reranking
+
+  A reranker orders a shortlist the embeddings stage fetched, reading the query
+  and each document together — see `ExAgent.Reranking`.
+
+      {:ok, ranked} = ExAgent.rerank(reranker, question, shortlist, top_n: 10)
+
   ## Failures
 
   Every failed operation returns `{:error, %ExAgent.Error{}}` in one vocabulary,
@@ -66,12 +73,33 @@ defmodule ExAgent do
   Every provider call emits `:telemetry` events — latency, token counts, and the
   normalized error type. See `ExAgent.Telemetry`.
 
-  ## Multi-agent patterns
+  ## Agent architectures
 
-  - `ExAgent.Patterns.Subagents` — centralized orchestration, isolated contexts
-  - `ExAgent.Patterns.Skills` — progressive disclosure of specialized personas
-  - `ExAgent.Patterns.Handoff` — state-driven transitions between agents
-  - `ExAgent.Patterns.Router` — parallel dispatch and synthesis
+  Eight patterns; the [README](readme.html#multi-agent-patterns) has a guide to
+  choosing between them, with analogies and worked comparisons.
+
+  *You* fix the order:
+
+  - `ExAgent.Patterns.Chain` — a fixed sequence of steps, with gates between them
+
+  The *input* picks the path:
+
+  - `ExAgent.Patterns.Router` — match the input, dispatch in parallel, synthesize
+
+  The *model* decides:
+
+  - `ExAgent.Patterns.Subagents` — specialists invoked as tools, contexts isolated
+
+  Control moves:
+
+  - `ExAgent.Patterns.Handoff` — hand the conversation to another agent
+  - `ExAgent.Patterns.Skills` — swap persona and tools inside one conversation
+
+  Quality and scale:
+
+  - `ExAgent.Patterns.Reflection` — draft, critique, revise until accepted
+  - `ExAgent.Patterns.MapReduce` — split an oversized input, process, combine
+  - `ExAgent.Patterns.Consensus` — sample several answers, go with the agreement
   """
 
   alias ExAgent.{Agent, Chunk, Context, FileRef, Message, Provider, Roles}
@@ -467,6 +495,48 @@ defmodule ExAgent do
 
   def embed(provider, inputs, opts) when is_list(inputs),
     do: Provider.embed(provider, inputs, opts)
+
+  @doc """
+  Reorders `documents` by relevance to `query`.
+
+  Takes a provider struct directly, like `embed/3` — reranking is stateless.
+  A provider with no reranking endpoint returns
+  `{:error, %ExAgent.Error{type: :unsupported}}`.
+
+  This is retrieval's **second** stage. Embeddings compare independently computed
+  vectors, which is what makes searching a corpus feasible; a reranker reads the
+  query and one document together, which is more accurate and far slower. Fetch a
+  shortlist with the first, order it with the second.
+
+  ## Options
+
+  Provider-specific; see `ExAgent.Providers.JinaRerankerM0`. Commonly `:top_n`.
+
+  ## Examples
+
+      {:ok, result} = ExAgent.rerank(reranker, "who restarts processes?", chunks, top_n: 5)
+
+      # `:index` points back into the list you passed, so it works for any record
+      Enum.map(result.results, fn %{index: i, score: score} -> {Enum.at(rows, i), score} end)
+
+  See `ExAgent.Reranking` for `take/2`, `above/2`, and why scores do not port
+  between models.
+  """
+  @spec rerank(struct(), String.t(), [String.t()], keyword()) ::
+          {:ok, ExAgent.Reranking.t()} | {:error, ExAgent.Error.t()}
+  defdelegate rerank(provider, query, documents, opts \\ []), to: Provider
+
+  @doc """
+  Reranks using the provider configured for `role`.
+
+  Accepts the same options as `rerank/4`.
+
+      {:ok, ranked} = ExAgent.rerank_with(:reranker, question, shortlist, top_n: 10)
+  """
+  @spec rerank_with(atom(), String.t(), [String.t()], keyword()) ::
+          {:ok, ExAgent.Reranking.t()} | {:error, ExAgent.Error.t()}
+  def rerank_with(role, query, documents, opts \\ []) when is_atom(role),
+    do: rerank(provider!(role), query, documents, opts)
 
   @doc """
   Returns the embedding task atoms `provider` accepts, or `[]` if it has none.
