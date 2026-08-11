@@ -111,7 +111,11 @@ defmodule ExAgent.MessageTest do
       [attachment] = msg.attachments
       assert attachment.filename == "test_doc.pdf"
       assert attachment.mime_type == "application/pdf"
-      assert attachment.data == "fake pdf content"
+      assert attachment.byte_size == 16
+
+      # Bytes are read lazily, at request-build time.
+      assert attachment.data == nil
+      assert {:ok, "fake pdf content"} = ExAgent.Attachment.bytes(attachment)
 
       File.rm!(path)
     end

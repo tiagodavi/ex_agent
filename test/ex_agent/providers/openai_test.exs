@@ -114,7 +114,7 @@ defmodule ExAgent.Providers.OpenAITest do
           )
       }
 
-      assert {:error, {401, _}} =
+      assert {:error, %ExAgent.Error{type: :auth, status: 401}} =
                ExAgent.Provider.upload(provider, "data", "text/plain")
     end
   end

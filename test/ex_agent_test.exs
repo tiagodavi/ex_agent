@@ -1,7 +1,6 @@
 defmodule ExAgentTest do
   use ExUnit.Case
 
-  alias ExAgent.Message
   alias ExAgent.Providers.OpenAI
 
   defp success_response(content) do
@@ -31,7 +30,7 @@ defmodule ExAgentTest do
         end)
 
       {:ok, pid} = ExAgent.start_agent(provider: provider)
-      assert {:ok, %Message{content: "Hello from facade!"}} = ExAgent.chat(pid, "Hi")
+      assert {:ok, %ExAgent.Response{content: "Hello from facade!"}} = ExAgent.chat(pid, "Hi")
     end
 
     test "stop_agent/1 terminates the agent" do

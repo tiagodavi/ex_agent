@@ -21,6 +21,8 @@ defmodule ExAgent.Providers.Gemini do
           max_tokens: integer(),
           system_prompt: String.t() | nil,
           tools: [ExAgent.Tool.t()],
+          modalities: [ExAgent.Source.modality()],
+          upload_cache: boolean(),
           req: Req.Request.t() | nil
         }
 
@@ -29,16 +31,18 @@ defmodule ExAgent.Providers.Gemini do
     :api_key,
     :system_prompt,
     :req,
-    model: "gemini-2.0-flash",
+    model: "gemini-3.6-flash",
     base_url: "https://generativelanguage.googleapis.com/v1beta",
     temperature: 0.6,
     max_tokens: 512,
-    tools: []
+    tools: [],
+    modalities: [:text, :image, :document, :video, :audio],
+    upload_cache: true
   ]
 
   @schema [
     api_key: [type: :string, required: true, doc: "Google API key"],
-    model: [type: :string, default: "gemini-2.0-flash", doc: "Model name"],
+    model: [type: :string, default: "gemini-3.6-flash", doc: "Model name"],
     base_url: [
       type: :string,
       default: "https://generativelanguage.googleapis.com/v1beta",
@@ -47,7 +51,17 @@ defmodule ExAgent.Providers.Gemini do
     temperature: [type: :float, default: 0.6],
     max_tokens: [type: :pos_integer, default: 512],
     system_prompt: [type: {:or, [:string, nil]}, default: nil, doc: "System prompt"],
-    tools: [type: {:list, :any}, default: [], doc: "Available tools"]
+    tools: [type: {:list, :any}, default: [], doc: "Available tools"],
+    modalities: [
+      type: {:list, :atom},
+      default: [:text, :image, :document, :video, :audio],
+      doc: "Attachment modalities the chosen model accepts"
+    ],
+    upload_cache: [
+      type: :boolean,
+      default: true,
+      doc: "Reuse previous uploads of identical bytes via `ExAgent.UploadCache`"
+    ]
   ]
 
   @doc """
@@ -56,10 +70,11 @@ defmodule ExAgent.Providers.Gemini do
   ## Options
 
   - `:api_key` (required) - Google API key
-  - `:model` - Model name (default: `"gemini-2.0-flash"`)
+  - `:model` - Model name (default: `"gemini-3.6-flash"`)
   - `:base_url` - API base URL
   - `:system_prompt` - System instruction to prepend
   - `:tools` - List of `ExAgent.Tool` structs
+  - `:upload_cache` - Reuse previous uploads of identical bytes (default: `true`)
   """
   @spec new(keyword()) :: t()
   def new(opts) do
@@ -89,5 +104,13 @@ defmodule ExAgent.Providers.Gemini do
   @impl true
   def stream(provider, messages, opts \\ []) do
     ExAgent.Services.GeminiService.stream(provider, messages, opts)
+  end
+
+  @impl true
+  def supported_modalities(%__MODULE__{modalities: modalities}), do: modalities
+
+  @impl true
+  def embed(provider, inputs, opts \\ []) do
+    ExAgent.Services.GeminiEmbedService.embed(provider, inputs, opts)
   end
 end

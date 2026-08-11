@@ -78,7 +78,8 @@ defmodule ExAgent.Patterns.SubagentsTest do
           conn |> Plug.Conn.send_resp(500, Jason.encode!(%{"error" => "internal"}))
         end)
 
-      assert {:error, {500, _}} = Subagents.invoke_subagent(spec, "Do something")
+      assert {:error, %ExAgent.Error{type: :server, status: 500, retryable?: true}} =
+               Subagents.invoke_subagent(spec, "Do something")
     end
 
     test "handles tool_call response gracefully" do

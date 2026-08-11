@@ -71,7 +71,7 @@ defmodule ExAgent.Services.OpenAIUploadServiceTest do
           conn |> Plug.Conn.send_resp(401, Jason.encode!(%{"error" => "unauthorized"}))
         end)
 
-      assert {:error, {401, _}} =
+      assert {:error, %ExAgent.Error{type: :auth, status: 401}} =
                OpenAIUploadService.upload(req, "data", "text/plain")
     end
 
@@ -81,7 +81,7 @@ defmodule ExAgent.Services.OpenAIUploadServiceTest do
           conn |> Plug.Conn.send_resp(429, Jason.encode!(%{"error" => "rate_limited"}))
         end)
 
-      assert {:error, {429, _}} =
+      assert {:error, %ExAgent.Error{type: :rate_limit, status: 429, retryable?: true}} =
                OpenAIUploadService.upload(req, "data", "text/plain")
     end
 
@@ -91,7 +91,7 @@ defmodule ExAgent.Services.OpenAIUploadServiceTest do
           conn |> Plug.Conn.send_resp(500, Jason.encode!(%{"error" => "internal"}))
         end)
 
-      assert {:error, {500, _}} =
+      assert {:error, %ExAgent.Error{type: :server, status: 500, retryable?: true}} =
                OpenAIUploadService.upload(req, "data", "text/plain")
     end
   end

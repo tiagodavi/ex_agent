@@ -24,6 +24,7 @@ defmodule ExAgent.Agent do
   @type agent_opts :: [
           id: String.t(),
           provider: struct(),
+          role: atom(),
           tools: [Tool.t()],
           skills: [Skill.t()],
           name: GenServer.name()
@@ -48,11 +49,32 @@ defmodule ExAgent.Agent do
 
   @doc """
   Starts an agent process linked to the current process.
+
+  Takes either `:provider` (a struct) or `:role` (an atom resolved through
+  `ExAgent.Roles`), never both.
   """
   @spec start_link(agent_opts()) :: GenServer.on_start()
   def start_link(opts) do
+    opts = resolve_role(opts)
     name = opts[:name]
     GenServer.start_link(__MODULE__, opts, name: name)
+  end
+
+  # Resolved here rather than in init/1 so both the direct call and the
+  # DynamicSupervisor path (child_spec -> start_link) go through it once, and a
+  # bad role raises at the caller instead of inside a supervised process.
+  @spec resolve_role(agent_opts()) :: agent_opts()
+  defp resolve_role(opts) do
+    case {Keyword.fetch(opts, :role), Keyword.has_key?(opts, :provider)} do
+      {{:ok, _role}, true} ->
+        raise ArgumentError, "expected :provider or :role, not both"
+
+      {{:ok, role}, false} ->
+        opts |> Keyword.delete(:role) |> Keyword.put(:provider, ExAgent.Roles.fetch!(role))
+
+      {:error, _has_provider?} ->
+        opts
+    end
   end
 
   @doc """
@@ -108,14 +130,23 @@ defmodule ExAgent.Agent do
 
   The conversation context is committed when the stream is fully consumed, so
   **the returned stream must be consumed** (e.g. with `Enum`/`Stream` functions)
-  for the agent to return to idle. Raises `ExAgent.StreamError` if the agent is
-  busy with another request.
+  for the agent to return to idle.
+
+  Never raises: a busy agent, a failed tool turn, and a mid-stream HTTP failure
+  all arrive as a single `ExAgent.Chunk` with `type: :done` and an `:error`.
 
   ## Examples
 
       agent
       |> ExAgent.Agent.chat_stream("Explain OTP step by step")
-      |> Enum.each(&IO.write/1)
+      |> Enum.each(fn
+        %ExAgent.Chunk{type: :text_delta, text: text} -> IO.write(text)
+        _chunk -> :ok
+      end)
+
+  Or fold it back into the same response `chat/3` returns:
+
+      {:ok, response} = agent |> ExAgent.Agent.chat_stream("Hi") |> ExAgent.collect()
   """
   @spec chat_stream(GenServer.server(), String.t(), keyword()) :: Enumerable.t()
   def chat_stream(agent, user_input, opts \\ []) when is_binary(user_input) do
@@ -130,13 +161,21 @@ defmodule ExAgent.Agent do
 
           {:error, reason} ->
             GenServer.cast(agent, {:commit_stream, []})
-            raise ExAgent.StreamError, status: nil, body: reason
+            error_stream(:server, "tool resolution failed: #{inspect(reason)}")
         end
 
       {:error, :busy} ->
-        raise ExAgent.StreamError, status: nil, body: :agent_busy
+        error_stream(:invalid_request, "agent is processing another request")
+
+      {:error, %ExAgent.Error{} = error} ->
+        [ExAgent.Chunk.error(error)]
     end
   end
+
+  # A one-chunk stream, so every failure mode reaches the consumer the same way.
+  @spec error_stream(ExAgent.Error.type(), String.t()) :: [ExAgent.Chunk.t()]
+  defp error_stream(type, message),
+    do: [ExAgent.Chunk.error(ExAgent.Error.new(type, message))]
 
   @doc """
   Returns the current conversation context.
@@ -188,26 +227,33 @@ defmodule ExAgent.Agent do
   end
 
   def handle_call({:chat, user_input, opts}, from, state) do
-    attachments = Keyword.get(opts, :files, [])
-    {:ok, user_msg} = Message.new(role: :user, content: user_input, attachments: attachments)
+    case build_user_message(user_input, opts) do
+      {:error, error} ->
+        {:reply, {:error, error}, state}
 
-    # Per-message built_in_tools override, or fall back to agent-level default
-    opts = Keyword.merge([built_in_tools: state.built_in_tools], opts)
+      {:ok, user_msg} ->
+        # Per-message built_in_tools override, or fall back to agent-level default
+        opts = Keyword.merge([built_in_tools: state.built_in_tools], opts)
 
-    state = %{state | context: Context.add_message(state.context, user_msg), status: :processing}
+        state = %{
+          state
+          | context: Context.add_message(state.context, user_msg),
+            status: :processing
+        }
 
-    # Evaluate skills before calling LLM
-    state = evaluate_and_apply_skills(state)
+        # Evaluate skills before calling LLM
+        state = evaluate_and_apply_skills(state)
 
-    # Run the (potentially long, IO-bound) tool loop off the GenServer so the
-    # process stays responsive to reads (get_context/status) and casts while it
-    # works. The caller stays blocked until we GenServer.reply/2 in handle_info.
-    task =
-      Task.Supervisor.async_nolink(ExAgent.TaskSupervisor, fn ->
-        run_tool_loop(state, opts, 0)
-      end)
+        # Run the (potentially long, IO-bound) tool loop off the GenServer so the
+        # process stays responsive to reads (get_context/status) and casts while it
+        # works. The caller stays blocked until we GenServer.reply/2 in handle_info.
+        task =
+          Task.Supervisor.async_nolink(ExAgent.TaskSupervisor, fn ->
+            run_tool_loop(state, opts, 0)
+          end)
 
-    {:noreply, %{state | reply_to: from, task_ref: task.ref}}
+        {:noreply, %{state | reply_to: from, task_ref: task.ref}}
+    end
   end
 
   @impl true
@@ -216,18 +262,26 @@ defmodule ExAgent.Agent do
   end
 
   def handle_call({:begin_stream, user_input, opts}, _from, state) do
-    attachments = Keyword.get(opts, :files, [])
-    {:ok, user_msg} = Message.new(role: :user, content: user_input, attachments: attachments)
+    case build_user_message(user_input, opts) do
+      {:error, error} ->
+        {:reply, {:error, error}, state}
 
-    stream_opts = Keyword.merge([built_in_tools: state.built_in_tools], opts)
+      {:ok, user_msg} ->
+        stream_opts = Keyword.merge([built_in_tools: state.built_in_tools], opts)
 
-    state = %{state | context: Context.add_message(state.context, user_msg), status: :processing}
-    state = evaluate_and_apply_skills(state)
+        state = %{
+          state
+          | context: Context.add_message(state.context, user_msg),
+            status: :processing
+        }
 
-    effective_tools = get_effective_tools(state)
-    provider = %{state.provider | tools: effective_tools}
+        state = evaluate_and_apply_skills(state)
 
-    {:reply, {:ok, provider, state.context.messages, effective_tools, stream_opts}, state}
+        effective_tools = get_effective_tools(state)
+        provider = %{state.provider | tools: effective_tools}
+
+        {:reply, {:ok, provider, state.context.messages, effective_tools, stream_opts}, state}
+    end
   end
 
   @impl true
@@ -265,7 +319,12 @@ defmodule ExAgent.Agent do
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{task_ref: ref} = state) do
-    GenServer.reply(state.reply_to, {:error, {:agent_task_failed, reason}})
+    error = %{
+      ExAgent.Error.new(:server, "agent task failed: #{inspect(reason)}")
+      | raw: reason
+    }
+
+    GenServer.reply(state.reply_to, {:error, error})
     {:noreply, %{state | status: :idle, reply_to: nil, task_ref: nil}}
   end
 
@@ -273,9 +332,22 @@ defmodule ExAgent.Agent do
 
   # Private Functions
 
+  # A malformed attachment must not crash the agent mid-handle_call — it is
+  # caller input, so it comes back as an error like any other bad request.
+  @spec build_user_message(String.t(), keyword()) ::
+          {:ok, Message.t()} | {:error, ExAgent.Error.t()}
+  defp build_user_message(user_input, opts) do
+    attachments = Keyword.get(opts, :files, [])
+
+    case Message.new(role: :user, content: user_input, attachments: attachments) do
+      {:ok, message} -> {:ok, message}
+      {:error, reason} -> {:error, ExAgent.Error.new(:invalid_request, reason)}
+    end
+  end
+
   @spec handle_loop_result(term(), state()) :: {term(), state()}
-  defp handle_loop_result({:ok, response_msg, loop_state}, state) do
-    {{:ok, response_msg}, %{state | context: loop_state.context, status: :idle}}
+  defp handle_loop_result({:ok, response, loop_state}, state) do
+    {{:ok, response}, %{state | context: loop_state.context, status: :idle}}
   end
 
   defp handle_loop_result({:handoff, target, context, loop_state}, state) do
@@ -287,7 +359,7 @@ defmodule ExAgent.Agent do
   end
 
   @spec run_tool_loop(state(), [atom()], non_neg_integer()) ::
-          {:ok, Message.t(), state()}
+          {:ok, ExAgent.Response.t(), state()}
           | {:handoff, pid() | atom(), Context.t(), state()}
           | {:error, term(), state()}
   defp run_tool_loop(state, _opts, iteration) when iteration >= @max_tool_iterations do
@@ -300,9 +372,9 @@ defmodule ExAgent.Agent do
     provider = %{state.provider | tools: effective_tools}
 
     case Provider.chat(provider, messages, opts) do
-      {:ok, %Message{} = response_msg} ->
-        new_context = Context.add_message(state.context, response_msg)
-        {:ok, response_msg, %{state | context: new_context}}
+      {:ok, %ExAgent.Response{} = response} ->
+        new_context = Context.add_message(state.context, response.message)
+        {:ok, response, %{state | context: new_context}}
 
       {:tool_call, name, args} ->
         # Record the assistant's tool call request in context
@@ -350,7 +422,7 @@ defmodule ExAgent.Agent do
 
   defp resolve_tools(provider, messages, opts, pending, iteration) do
     case Provider.chat(provider, messages, opts) do
-      {:ok, %Message{}} ->
+      {:ok, %ExAgent.Response{}} ->
         # Final turn: discard its text; stream a fresh generation from `messages`.
         {:ok, messages, pending}
 
@@ -411,15 +483,37 @@ defmodule ExAgent.Agent do
     provider
     |> Provider.stream(messages, opts)
     |> Stream.transform(
-      fn -> "" end,
-      fn chunk, acc -> {[chunk], acc <> chunk} end,
-      fn acc ->
-        {:ok, final} = Message.new(role: :assistant, content: acc)
+      fn -> {[], []} end,
+      fn chunk, acc -> {[chunk], accumulate(chunk, acc)} end,
+      fn {texts, calls} ->
+        # The after-fun also runs on halt, so a failed or abandoned stream still
+        # releases the agent; leaving it :processing forever is worse than
+        # committing a partial turn, and the user message is already in context.
+        {:ok, final} =
+          Message.new(
+            role: :assistant,
+            content: texts |> Enum.reverse() |> IO.iodata_to_binary(),
+            tool_calls: calls |> Enum.reverse() |> ExAgent.Chunk.finalize_tool_calls()
+          )
+
         GenServer.cast(agent, {:commit_stream, pending ++ [final]})
         :ok
       end
     )
   end
+
+  # Reasoning traces are deliberately excluded: they are not conversation
+  # history, and replaying them corrupts the next turn.
+  @spec accumulate(ExAgent.Chunk.t(), {[String.t()], [ExAgent.Chunk.t()]}) ::
+          {[String.t()], [ExAgent.Chunk.t()]}
+  defp accumulate(%ExAgent.Chunk{type: :text_delta, text: text}, {texts, calls})
+       when is_binary(text),
+       do: {[text | texts], calls}
+
+  defp accumulate(%ExAgent.Chunk{type: :tool_call_delta} = chunk, {texts, calls}),
+    do: {texts, [chunk | calls]}
+
+  defp accumulate(_chunk, acc), do: acc
 
   @spec execute_tool(String.t(), map(), [Tool.t()]) :: any()
   defp execute_tool(name, args, tools) do
@@ -428,9 +522,18 @@ defmodule ExAgent.Agent do
         {:error, "unknown tool: #{name}"}
 
       %Tool{function: fun} ->
-        fun.(args)
+        normalize_tool_result(fun.(args))
     end
   end
+
+  # `ExAgent.Tool`'s :function is typed `(map() -> any())`, so a tool is free to
+  # return a bare value. Treat that as the result instead of crashing the loop.
+  @spec normalize_tool_result(term()) ::
+          {:ok, term()} | {:error, term()} | {:handoff, pid() | atom(), Context.t()}
+  defp normalize_tool_result({:ok, result}), do: {:ok, result}
+  defp normalize_tool_result({:error, reason}), do: {:error, reason}
+  defp normalize_tool_result({:handoff, _target, _context} = handoff), do: handoff
+  defp normalize_tool_result(other), do: {:ok, other}
 
   @spec get_effective_tools(state()) :: [Tool.t()]
   defp get_effective_tools(%{tools: tools, active_skill: nil}), do: tools

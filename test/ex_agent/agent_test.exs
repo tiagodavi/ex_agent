@@ -52,7 +52,7 @@ defmodule ExAgent.AgentTest do
         end)
 
       {:ok, pid} = Agent.start_link(provider: provider)
-      assert {:ok, %Message{role: :assistant, content: "Hello!"}} = Agent.chat(pid, "Hi")
+      assert {:ok, %ExAgent.Response{content: "Hello!"}} = Agent.chat(pid, "Hi")
     end
 
     test "maintains conversation context across messages" do
@@ -106,12 +106,86 @@ defmodule ExAgent.AgentTest do
 
       {:ok, pid} = Agent.start_link(provider: provider, tools: [tool])
 
-      assert {:ok, %Message{content: "Found results for elixir"}} =
+      assert {:ok, %ExAgent.Response{content: "Found results for elixir"}} =
                Agent.chat(pid, "Search elixir")
 
       # Tool call flow produces 4 messages: user, assistant-tool-call, tool-result, assistant-final
       context = Agent.get_context(pid)
       assert length(context.messages) == 4
+    end
+
+    # `ExAgent.Tool`'s :function is typed `(map() -> any())` and its own doctest
+    # returns a bare `:ok`, so a tool returning an unwrapped value must be taken
+    # as the result rather than crashing the loop with a CaseClauseError.
+    test "accepts a tool that returns a bare value instead of an {:ok, _} tuple" do
+      call_count = :counters.new(1, [:atomics])
+
+      provider =
+        build_provider(fn conn ->
+          :counters.add(call_count, 1, 1)
+
+          if :counters.get(call_count, 1) == 1 do
+            Req.Test.json(conn, tool_call_response("weather", %{"city" => "Lisbon"}))
+          else
+            {:ok, body, conn} = Plug.Conn.read_body(conn)
+            # The bare value still reaches the model as the tool result.
+            assert body =~ "Lisbon: 22C and sunny"
+            Req.Test.json(conn, success_response("It is 22C in Lisbon"))
+          end
+        end)
+
+      {:ok, tool} =
+        Tool.new(
+          name: "weather",
+          description: "Weather",
+          parameters: %{},
+          function: fn %{"city" => city} -> "#{city}: 22C and sunny" end
+        )
+
+      {:ok, pid} = Agent.start_link(provider: provider, tools: [tool])
+
+      assert {:ok, %ExAgent.Response{content: "It is 22C in Lisbon"}} =
+               Agent.chat(pid, "Weather in Lisbon?")
+    end
+
+    test "given a tool returning a bare value, then streaming folds it in too" do
+      # chat_stream/3 resolves tool turns non-streamed first and only streams the
+      # final turn, so branch on what the request actually asks for.
+      provider =
+        build_provider(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+
+          cond do
+            parsed["stream"] ->
+              conn
+              |> Plug.Conn.put_resp_content_type("text/event-stream")
+              |> Plug.Conn.send_resp(
+                200,
+                ~s(data: {"choices":[{"delta":{"content":"22C in Porto"}}]}\n\ndata: [DONE]\n\n)
+              )
+
+            Enum.any?(parsed["messages"], &(&1["role"] == "tool")) ->
+              assert body =~ "Porto: 22C and sunny"
+              Req.Test.json(conn, success_response("done"))
+
+            true ->
+              Req.Test.json(conn, tool_call_response("weather", %{"city" => "Porto"}))
+          end
+        end)
+
+      {:ok, tool} =
+        Tool.new(
+          name: "weather",
+          description: "Weather",
+          parameters: %{},
+          function: fn %{"city" => city} -> "#{city}: 22C and sunny" end
+        )
+
+      {:ok, pid} = Agent.start_link(provider: provider, tools: [tool])
+
+      assert {:ok, %ExAgent.Response{content: "22C in Porto"}} =
+               pid |> Agent.chat_stream("Weather in Porto?") |> ExAgent.collect()
     end
 
     test "passes file attachments to message" do
@@ -127,7 +201,7 @@ defmodule ExAgent.AgentTest do
 
       {:ok, pid} = Agent.start_link(provider: provider)
 
-      assert {:ok, %Message{content: "I see the image"}} =
+      assert {:ok, %ExAgent.Response{content: "I see the image"}} =
                Agent.chat(pid, "Describe this",
                  files: [%{data: "fake_png", mime_type: "image/png"}]
                )
@@ -171,7 +245,48 @@ defmodule ExAgent.AgentTest do
         end)
 
       {:ok, pid} = Agent.start_link(provider: provider)
-      assert {:error, {500, _}} = Agent.chat(pid, "Hi")
+
+      assert {:error, %ExAgent.Error{type: :server, status: 500, retryable?: true}} =
+               Agent.chat(pid, "Hi")
+    end
+
+    test "returns an error instead of crashing when an attachment is malformed" do
+      provider = build_provider(fn conn -> Req.Test.json(conn, success_response("Hi")) end)
+      {:ok, pid} = Agent.start_link(provider: provider)
+
+      assert {:error, %ExAgent.Error{type: :invalid_request} = error} =
+               Agent.chat(pid, "Look", files: [%{path: "/nonexistent/nope.png"}])
+
+      assert error.message =~ "failed to read file"
+
+      # The agent survived and is still usable.
+      assert Process.alive?(pid)
+      assert {:ok, _} = Agent.chat(pid, "Hi")
+    end
+
+    test "returns an error when an attachment mime type cannot be inferred" do
+      provider = build_provider(fn conn -> Req.Test.json(conn, success_response("Hi")) end)
+      {:ok, pid} = Agent.start_link(provider: provider)
+
+      assert {:error, %ExAgent.Error{type: :invalid_request} = error} =
+               Agent.chat(pid, "Look", files: [%{data: "not a known format"}])
+
+      assert error.message =~ ":mime_type"
+      assert Process.alive?(pid)
+    end
+
+    @tag :capture_log
+    test "returns an %ExAgent.Error{} when the request task crashes" do
+      provider = build_provider(fn _conn -> raise "boom" end)
+
+      {:ok, pid} = Agent.start_link(provider: provider)
+
+      assert {:error, %ExAgent.Error{type: :server} = error} = Agent.chat(pid, "Hi")
+      assert error.message =~ "agent task failed"
+      refute error.raw == nil
+
+      # The agent survives the crash and is ready for the next turn.
+      assert :sys.get_state(pid).status == :idle
     end
 
     test "handles unknown tool gracefully" do
@@ -190,7 +305,9 @@ defmodule ExAgent.AgentTest do
         end)
 
       {:ok, pid} = Agent.start_link(provider: provider)
-      assert {:ok, %Message{content: "Handled gracefully"}} = Agent.chat(pid, "Do something")
+
+      assert {:ok, %ExAgent.Response{content: "Handled gracefully"}} =
+               Agent.chat(pid, "Do something")
     end
 
     test "returns error when max tool iterations reached" do
@@ -351,7 +468,7 @@ defmodule ExAgent.AgentTest do
       assert hd(context.messages).role == :user
 
       Gate.release(gate)
-      assert {:ok, %Message{content: "done"}} = Task.await(caller)
+      assert {:ok, %ExAgent.Response{content: "done"}} = Task.await(caller)
     end
 
     test "returns :busy when a second chat starts while one is processing" do
@@ -389,6 +506,12 @@ defmodule ExAgent.AgentTest do
 
     defp delta(content), do: %{"choices" => [%{"delta" => %{"content" => content}}]}
 
+    defp stream_texts(stream) do
+      stream
+      |> Enum.filter(&(&1.type == :text_delta))
+      |> Enum.map(& &1.text)
+    end
+
     defp sse_plug(body) do
       fn conn ->
         conn
@@ -401,7 +524,7 @@ defmodule ExAgent.AgentTest do
       provider = build_provider(sse_plug(sse([delta("Hel"), delta("lo"), delta("!")])))
       {:ok, pid} = Agent.start_link(provider: provider)
 
-      assert ["Hel", "lo", "!"] = pid |> Agent.chat_stream("Hi") |> Enum.to_list()
+      assert ["Hel", "lo", "!"] = pid |> Agent.chat_stream("Hi") |> stream_texts()
     end
 
     test "commits the streamed response to context once consumed" do
@@ -422,7 +545,7 @@ defmodule ExAgent.AgentTest do
 
       pid |> Agent.chat_stream("first") |> Stream.run()
       assert :sys.get_state(pid).status == :idle
-      assert ["ok"] = pid |> Agent.chat_stream("second") |> Enum.to_list()
+      assert ["ok"] = pid |> Agent.chat_stream("second") |> stream_texts()
     end
 
     test "resolves tool calls first, then streams the final turn" do
@@ -460,7 +583,8 @@ defmodule ExAgent.AgentTest do
 
       {:ok, pid} = Agent.start_link(provider: provider, tools: [tool])
 
-      assert ["Found ", "elixir"] = pid |> Agent.chat_stream("Search elixir") |> Enum.to_list()
+      assert ["Found ", "elixir"] =
+               pid |> Agent.chat_stream("Search elixir") |> stream_texts()
 
       # user, assistant-tool-call, tool-result, streamed assistant
       context = Agent.get_context(pid)
@@ -468,7 +592,7 @@ defmodule ExAgent.AgentTest do
       assert %Message{role: :assistant, content: "Found elixir"} = List.last(context.messages)
     end
 
-    test "raises when the agent is busy" do
+    test "yields an error chunk instead of raising when the agent is busy" do
       {:ok, gate} = Gate.start_link()
 
       provider =
@@ -481,9 +605,10 @@ defmodule ExAgent.AgentTest do
       caller = Task.async(fn -> Agent.chat(pid, "First") end)
       wait_for_processing(pid)
 
-      assert_raise ExAgent.StreamError, fn ->
-        pid |> Agent.chat_stream("Second") |> Enum.to_list()
-      end
+      assert [%ExAgent.Chunk{type: :done, finish_reason: :error, error: error}] =
+               pid |> Agent.chat_stream("Second") |> Enum.to_list()
+
+      assert error.message =~ "processing another request"
 
       Gate.release(gate)
       assert {:ok, _} = Task.await(caller)

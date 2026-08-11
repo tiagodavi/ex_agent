@@ -108,7 +108,7 @@ defmodule ExAgent.Services.GeminiUploadServiceTest do
           end
         )
 
-      assert {:error, {403, _}} =
+      assert {:error, %ExAgent.Error{type: :auth, status: 403}} =
                GeminiUploadService.upload("AIza-test", "data", "text/plain",
                  req: req,
                  upload_url: "http://localhost/upload/v1beta/files"
@@ -123,7 +123,7 @@ defmodule ExAgent.Services.GeminiUploadServiceTest do
           end
         )
 
-      assert {:error, {500, _}} =
+      assert {:error, %ExAgent.Error{type: :server, status: 500, retryable?: true}} =
                GeminiUploadService.upload("AIza-test", "data", "text/plain",
                  req: req,
                  upload_url: "http://localhost/upload/v1beta/files"
@@ -156,7 +156,7 @@ defmodule ExAgent.Services.GeminiUploadServiceTest do
           end
         )
 
-      assert {:error, :file_processing_failed} =
+      assert {:error, %ExAgent.Error{type: :server, message: "file processing failed"}} =
                GeminiUploadService.upload("AIza-test", "data", "text/plain",
                  req: req,
                  upload_url: "http://localhost/upload/v1beta/files",

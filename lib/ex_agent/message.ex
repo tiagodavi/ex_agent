@@ -8,7 +8,7 @@ defmodule ExAgent.Message do
 
   @type role :: :system | :user | :assistant | :tool
 
-  @type attachment :: %{data: binary(), mime_type: String.t()} | %{file_ref: ExAgent.FileRef.t()}
+  @type attachment :: ExAgent.Attachment.t()
 
   @type t :: %__MODULE__{
           role: role(),
@@ -69,44 +69,50 @@ defmodule ExAgent.Message do
   defp validate_content(content) when is_binary(content), do: {:ok, content}
   defp validate_content(_), do: {:error, "content must be a string"}
 
-  @spec validate_attachments([map()]) :: {:ok, [attachment()]} | {:error, String.t()}
-  defp validate_attachments([]), do: {:ok, []}
+  @doc """
+  Applies `fun` to every attachment on every message, halting on the first error.
 
-  defp validate_attachments(attachments) when is_list(attachments) do
-    Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
-      case resolve_attachment(att) do
-        {:ok, resolved} -> {:cont, {:ok, acc ++ [resolved]}}
-        {:error, _} = err -> {:halt, err}
-      end
+  Provider services use this to resolve attachments — loading bytes, uploading
+  oversized files — before building a request body, so their formatting
+  functions stay free of IO.
+  """
+  @spec map_attachments([t()], (attachment() -> {:ok, attachment()} | {:error, error})) ::
+          {:ok, [t()]} | {:error, error}
+        when error: term()
+  def map_attachments(messages, fun) do
+    collect(messages, fn
+      %__MODULE__{attachments: []} = message ->
+        {:ok, message}
+
+      %__MODULE__{attachments: attachments} = message ->
+        with {:ok, mapped} <- collect(attachments, fun) do
+          {:ok, %{message | attachments: mapped}}
+        end
     end)
   end
 
+  @spec collect([item], (item -> {:ok, result} | {:error, error})) ::
+          {:ok, [result]} | {:error, error}
+        when item: term(), result: term(), error: term()
+  defp collect(items, fun) do
+    items
+    |> Enum.reduce_while({:ok, []}, fn item, {:ok, acc} ->
+      case fun.(item) do
+        {:ok, result} -> {:cont, {:ok, [result | acc]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, results} -> {:ok, Enum.reverse(results)}
+      {:error, _} = err -> err
+    end
+  end
+
+  @spec validate_attachments([map()]) :: {:ok, [attachment()]} | {:error, String.t()}
+  defp validate_attachments([]), do: {:ok, []}
+
+  defp validate_attachments(attachments) when is_list(attachments),
+    do: collect(attachments, &ExAgent.Attachment.new/1)
+
   defp validate_attachments(_), do: {:error, "attachments must be a list"}
-
-  @spec resolve_attachment(map()) :: {:ok, attachment()} | {:error, String.t()}
-  defp resolve_attachment(%{file_ref: %ExAgent.FileRef{} = ref}) do
-    {:ok, %{file_ref: ref}}
-  end
-
-  defp resolve_attachment(%{data: data, mime_type: mime_type} = att)
-       when is_binary(data) and is_binary(mime_type) do
-    base = %{data: data, mime_type: mime_type}
-
-    case Map.get(att, :filename) do
-      nil -> {:ok, base}
-      filename when is_binary(filename) -> {:ok, Map.put(base, :filename, filename)}
-      _ -> {:ok, base}
-    end
-  end
-
-  defp resolve_attachment(%{path: path, mime_type: mime_type})
-       when is_binary(path) and is_binary(mime_type) do
-    case File.read(path) do
-      {:ok, data} -> {:ok, %{data: data, mime_type: mime_type, filename: Path.basename(path)}}
-      {:error, reason} -> {:error, "failed to read file #{path}: #{inspect(reason)}"}
-    end
-  end
-
-  defp resolve_attachment(_),
-    do: {:error, "each attachment must have :mime_type and either :data, :path, or :file_ref"}
 end

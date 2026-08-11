@@ -7,7 +7,7 @@ defmodule ExAgent.Patterns.Router do
   single response.
   """
 
-  alias ExAgent.{Agent, Message}
+  alias ExAgent.Agent
 
   @type route :: %{
           name: String.t(),
@@ -74,7 +74,7 @@ defmodule ExAgent.Patterns.Router do
     |> Task.async_stream(
       fn %{name: name, agent: agent} ->
         case Agent.chat(agent, input) do
-          {:ok, %Message{content: content}} -> {name, content}
+          {:ok, %ExAgent.Response{content: content}} -> {name, content}
           {:error, reason} -> {name, "Error: #{inspect(reason)}"}
         end
       end,

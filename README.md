@@ -1,680 +1,827 @@
 # ExAgent
 
-An Elixir library for building multi-agent LLM applications. ExAgent abstracts calls to various LLM providers (OpenAI, Gemini, DeepSeek) via an extensible behaviour and orchestrates them using OTP primitives with four multi-agent design patterns.
+Build multi-agent LLM applications in Elixir. One behaviour abstracts OpenAI, Gemini, and
+any OpenAI-compatible endpoint; OTP primitives orchestrate them.
 
-[Hex Docs](https://hexdocs.pm/ex_agent)
+[Hex](https://hex.pm/packages/ex_agent) · [HexDocs](https://hexdocs.pm/ex_agent)
 
-## Features
-
-- **Behaviour-based LLM abstraction** — Swap providers without changing application code
-- **Built on OTP** — Agents backed by GenServers, supervised processes, async Tasks
-- **Streaming** — Stream responses as a lazy `Stream` of text chunks (great for reasoning models)
-- **Automatic tool execution** — Define tools once, the agent loops LLM calls until complete
+- **Swap providers without touching application code** — one behaviour, struct-based config
+- **Config-driven roles** — name a purpose (`:vision`, `:embed`), not a vendor
+- **Structured streaming** — text, reasoning, tool-call deltas, usage as typed chunks
+- **Automatic tool execution** — define a tool once; the agent loops until done
+- **Multimodal** — images, PDFs, video, audio from a path, bytes, a URL, or an upload
+- **Embeddings for RAG** — one task vocabulary across providers, provenance on every result
+- **Normalized errors** — one `%ExAgent.Error{}` with a `retryable?` flag
+- **Fails loudly** — unsupported input is rejected before a request is built, never dropped
 - **4 multi-agent patterns** — Subagents, Skills, Handoffs, Router
-- **HTTP via Req** — Clean, composable HTTP with built-in JSON encoding and auth
-- **Multimodal file attachments** — Send images, PDFs, and other files alongside chat messages
-- **Extensible** — Add any LLM provider by implementing a single behaviour
 
-## Installation
-
-Add `ex_agent` to your list of dependencies in `mix.exs`:
+## Install
 
 ```elixir
 def deps do
-  [
-    {:ex_agent, "~> 0.2.0"}
-  ]
+  [{:ex_agent, "~> 0.3.0"}]
 end
 ```
 
-## Quick Start
+## Quick start
 
 ```elixir
-# 1. Create a provider
-provider = ExAgent.Providers.OpenAI.new(api_key: System.get_env("OPENAI_API_KEY"))
-
-# 2. Start an agent
+provider = ExAgent.Providers.OpenAI.new(api_key: System.fetch_env!("OPENAI_API_KEY"))
 {:ok, agent} = ExAgent.start_agent(provider: provider)
 
-# 3. Chat
 {:ok, response} = ExAgent.chat(agent, "What is Elixir?")
-IO.puts(response.content)
+response.content   #=> "Elixir is a functional programming language..."
 ```
+
+---
+
+## Contents
+
+| | |
+|---|---|
+| [Providers](#providers) · [Roles](#roles) | Configure who answers |
+| [Agents](#agents) · [Tools](#tools) · [Streaming](#streaming) | Run a conversation |
+| [Attachments](#attachments) · [Uploads](#uploads) | Send files |
+| [Embeddings](#embeddings) | RAG |
+| [Patterns](#multi-agent-patterns) | Subagents, Skills, Handoffs, Router |
+| [Recipes](#recipes) | Retry, RAG, multi-tenant, LiveView, testing |
+| [Custom providers](#custom-providers) · [Architecture](#architecture) · [Testing](#testing) | Extend |
+
+---
 
 ## Providers
 
-ExAgent ships with three built-in providers. Each is configured via `new/1` and automatically initializes a Req HTTP client.
-
-### OpenAI
-
-Supports chat and file attachments (images via `image_url` multipart format).
+Every provider is a struct built by `new/1`, which validates options and prepares a `Req`
+client. Pass it to `start_agent/1` or use it directly.
 
 ```elixir
-provider = ExAgent.Providers.OpenAI.new(
-  api_key: "sk-...", # required
-  model: "gpt-4o", # default: "gpt-4o"
-  base_url: "https://api.openai.com/v1",  # default
-  system_prompt: "You are a helpful assistant."
+ExAgent.Providers.OpenAI.new(
+  api_key: "sk-...",                  # required
+  model: "gpt-4o",                    # default
+  system_prompt: "You are concise.",
+  temperature: 0.6,
+  max_tokens: 512
+)
+
+ExAgent.Providers.Gemini.new(
+  api_key: "AIza...",                 # required
+  model: "gemini-3.6-flash"           # default
 )
 ```
 
-### Gemini
+### OpenAI-compatible (vLLM, Modal, OpenRouter, Together, Groq)
 
-Supports chat and file attachments (images, PDFs, etc. via `inline_data` format).
+One provider for any endpoint speaking the OpenAI chat-completions dialect. Unlike
+`Providers.OpenAI`, it accepts arbitrary auth headers — which is what makes Modal's proxy
+auth reachable.
 
 ```elixir
-provider = ExAgent.Providers.Gemini.new(
-  api_key: "AIza...", # required
-  model: "gemini-2.0-flash", # default: "gemini-2.0-flash"
-  system_prompt: "Be concise."
+provider = ExAgent.Providers.OpenAICompatible.new(
+  base_url: System.fetch_env!("MODAL_URL") <> "/v1",   # required, include /v1
+  model: "Qwen/Qwen3-VL-8B-Instruct",                  # required
+  headers: [
+    {"Modal-Key", System.fetch_env!("MODAL_KEY")},
+    {"Modal-Secret", System.fetch_env!("MODAL_SECRET")}
+  ],
+  modalities: [:text, :image, :video],
+  max_inline_bytes: 33_554_432
 )
-```
 
-### DeepSeek
-
-Supports chat and tool calling. File attachments are silently ignored (DeepSeek API does not support multimodal input).
-
-```elixir
-provider = ExAgent.Providers.DeepSeek.new(
-  api_key: "sk-...",  # required
-  model: "deepseek-chat", # default: "deepseek-chat"
-  system_prompt: "You are a coding expert."
+# Gateways using bearer auth: :api_key is sugar for Authorization: Bearer.
+# Explicit :headers override it rather than being sent alongside.
+ExAgent.Providers.OpenAICompatible.new(
+  base_url: "https://openrouter.ai/api/v1",
+  model: "meta-llama/llama-3.3-70b-instruct",
+  api_key: System.fetch_env!("OPENROUTER_API_KEY"),
+  modalities: [:text, :image]
 )
+
+# Container swaps where config still names the old model are a common failure.
+case ExAgent.Providers.OpenAICompatible.probe(provider) do
+  :ok -> :ready
+  {:error, error} -> Logger.warning(Exception.message(error))
+end
 ```
 
-## Core Concepts
+There is **no Files API** here: bytes always become `data:` URIs, and anything past
+`:max_inline_bytes` returns `{:error, %ExAgent.Error{type: :unsupported}}` telling you to
+host it at a URL the container can reach. Documents are unsupported — extract the text or
+rasterize the pages first.
 
-### Message
+### Modalities are per model, not per vendor
 
-Represents a single message in a conversation.
+`o1-mini` reads no images; a text-only Gemini could ship tomorrow. Every provider takes
+`:modalities`, and narrowing makes the gate fire before any request is built.
 
 ```elixir
-{:ok, msg} = ExAgent.Message.new(role: :user, content: "Hello!")
-# Supported roles: :system, :user, :assistant, :tool
+provider = ExAgent.Providers.OpenAI.new(api_key: key, model: "o1-mini", modalities: [:text])
+{:ok, agent} = ExAgent.start_agent(provider: provider)
+
+ExAgent.chat(agent, "Describe this", files: [%{path: "photo.jpg"}])
+#=> {:error, %ExAgent.Error{type: :unsupported}}
 ```
 
-### Tool
+| Modality | OpenAI | Gemini | OpenAICompatible |
+|---|---|---|---|
+| `:image` | ✅ | ✅ | declare it |
+| `:document` | ✅ | ✅ | ❌ |
+| `:video` | ❌ | ✅ | declare it |
+| `:audio` | ❌ | ✅ | declare it |
 
-Defines a function the LLM can invoke, with JSON Schema parameters.
+Those are *defaults*. ExAgent keeps no model-to-modality table on purpose — it would go
+stale silently, and whoever picked the model already knows.
+
+## Roles
+
+Declare which provider serves which purpose in config, then name the purpose at the call
+site. Swapping a hosted model for a self-hosted container becomes a one-file change.
 
 ```elixir
-{:ok, tool} = ExAgent.Tool.new(
+# config/runtime.exs
+config :ex_agent, :roles,
+  chat: {ExAgent.Providers.Gemini, api_key: System.fetch_env!("GEMINI_API_KEY")},
+  vision: {ExAgent.Providers.OpenAICompatible,
+             base_url: System.fetch_env!("MODAL_URL") <> "/v1",
+             model: "Qwen/Qwen3-VL-8B-Instruct",
+             modalities: [:text, :image]},
+  embed: {ExAgent.Providers.OpenAICompatible,
+            base_url: System.fetch_env!("JINA_URL") <> "/v1",
+            model: "jinaai/jina-embeddings-v3"}
+```
+
+Role names are arbitrary atoms — `:ocr`, `:cheap_summarizer`, whatever fits. A bare module
+means "that module with no options".
+
+```elixir
+# Roles are sugar: provider!/1 returns an ordinary struct usable everywhere.
+{:ok, agent} = ExAgent.start_agent(provider: ExAgent.provider!(:vision))
+{:ok, agent} = ExAgent.start_agent(role: :vision, tools: [...])   # shorthand
+
+ExAgent.roles()          #=> [:chat, :vision, :embed]
+ExAgent.provider(:nope)  #=> :error   (non-raising counterpart)
+```
+
+Stateless one-shot wrappers skip the agent process entirely:
+
+```elixir
+{:ok, response} = ExAgent.chat_with(:vision, "Invoice total?",
+                    files: [%{url: "https://cdn.example.com/invoice.png"}])
+
+ExAgent.stream_with(:chat, "Explain OTP") |> Enum.each(&IO.write(&1.text || ""))
+
+{:ok, docs} = ExAgent.embed_with(:embed, chunks, task: :retrieval_document)
+```
+
+**These do not run the tool loop** — it lives in the agent. A tool-configured provider
+returns the raw `{:tool_call, name, args}`. Use `start_agent(role: ..., tools: [...])`
+when you want tools resolved.
+
+Roles resolve **once at boot** into `:persistent_term`, so lookups cost nothing per
+request. A module that is missing, lacks `new/1`, does not implement the behaviour, or
+whose `new/1` raises fails the boot naming the role — a missing `GEMINI_API_KEY` crashes
+at deploy time, not with a 401 at 3am. Vault-backed credentials can be a zero-arity
+function or `{m, f, a}`, resolved once at boot:
+
+```elixir
+config :ex_agent, :roles,
+  chat: {ExAgent.Providers.Gemini, api_key: {MyApp.Vault, :fetch, ["gemini"]}}
+```
+
+`provider!/2` merges overrides and returns a *fresh* struct — for per-tenant keys. It
+rebuilds the `Req` client, so it is fine per request but not in a tight loop:
+
+```elixir
+ExAgent.provider!(:chat, api_key: tenant.openai_key, model: "gpt-4o-mini")
+```
+
+If you assemble role config after boot, call `ExAgent.Roles.build!/0` yourself.
+
+## Agents
+
+Agents are GenServers under a DynamicSupervisor. They hold conversation context and run
+the tool loop.
+
+```elixir
+{:ok, agent} = ExAgent.start_agent(
+  provider: provider,
+  id: "support-42",
+  tools: [weather_tool],
+  skills: [sql_skill],
+  built_in_tools: [:web_search],
+  name: {:global, "support-42"}       # optional GenServer registration
+)
+
+{:ok, response} = ExAgent.chat(agent, "What's the weather in Tokyo?")
+task = ExAgent.chat_async(agent, "Tell me a story");  {:ok, response} = Task.await(task)
+
+ExAgent.get_context(agent).messages   # full history
+ExAgent.reset(agent)                  # clear context
+ExAgent.stop_agent(agent)
+```
+
+One turn at a time: while a request is in flight, `chat/3` returns `{:error, :busy}`.
+
+### Response
+
+`chat/3` and `collect/1` both return the same struct, so streaming and non-streaming share
+one downstream path.
+
+```elixir
+response.content        #=> "Elixir is a functional language..."
+response.usage          #=> %{input_tokens: 8, output_tokens: 96, total_tokens: 104}
+response.finish_reason  #=> :stop | :length | :tool_calls | :content_filter | :error
+response.tool_calls     #=> nil, or [%{"name" => ..., "args" => %{}}]
+response.thinking       #=> reasoning trace, when the model emitted one
+response.message        #=> the %ExAgent.Message{} appended to history
+```
+
+`:thinking` is deliberately kept out of `:message` — reasoning is not conversation
+history, and replaying it corrupts the next turn.
+
+### Errors
+
+Every failed operation returns `{:error, %ExAgent.Error{}}` in one vocabulary, so retry
+logic is written once rather than per provider.
+
+```elixir
+case ExAgent.chat(agent, "Summarize this") do
+  {:ok, response} -> response
+  {:error, %ExAgent.Error{retryable?: true} = e} -> retry_with_backoff(e)
+  {:error, %ExAgent.Error{type: :context_length}} -> summarize_history_and_retry()
+  {:error, %ExAgent.Error{} = e} -> Logger.error(Exception.message(e))
+end
+```
+
+| Type | Meaning | `retryable?` |
+|---|---|---|
+| `:auth` | Bad or missing credentials (401, 403) | ❌ |
+| `:not_found` | Unknown model or resource (404) | ❌ |
+| `:timeout` | Request timed out (408, transport) | ✅ |
+| `:rate_limit` | Rate or quota limit hit (429) | ✅ |
+| `:context_length` | Input exceeds the context window | ❌ |
+| `:invalid_request` | Malformed request (other 4xx) | ❌ |
+| `:unsupported` | The provider cannot do this at all | ❌ |
+| `:server` | Provider-side failure (5xx, bad shape) | ✅ |
+| `:transport` | Connection-level failure | ✅ |
+
+`:raw` carries the provider's original body and `:provider` names the module. `Error` is
+also an exception, so it can be raised where no return value exists.
+
+## Tools
+
+Define a function the LLM can invoke. The agent loops — call, execute, feed the result
+back — until a final answer or 10 iterations.
+
+```elixir
+{:ok, weather_tool} = ExAgent.Tool.new(
   name: "get_weather",
   description: "Get current weather for a city",
   parameters: %{
     "type" => "object",
-    "properties" => %{
-      "city" => %{"type" => "string", "description" => "City name"}
-    },
+    "properties" => %{"city" => %{"type" => "string"}},
     "required" => ["city"]
   },
-  function: fn %{"city" => city} ->
-    {:ok, "#{city}: 22C, sunny"}
-  end
-)
-```
-
-### Context
-
-Portable conversation state with message history and metadata.
-
-```elixir
-context = ExAgent.Context.new(metadata: %{session_id: "abc123"})
-
-{:ok, msg} = ExAgent.Message.new(role: :user, content: "Hello")
-context = ExAgent.Context.add_message(context, msg)
-
-# Get the last assistant response
-last = ExAgent.Context.get_last_assistant_message(context)
-```
-
-### Skill
-
-A loadable persona with its own system prompt, tools, and activation function.
-
-```elixir
-{:ok, sql_skill} = ExAgent.Skill.new(
-  name: "sql_expert",
-  system_prompt: "You are a SQL expert. Help users write queries.",
-  tools: [sql_tool],
-  activation_fn: fn ctx ->
-    Enum.any?(ctx.messages, fn m ->
-      String.contains?(m.content, "SQL") or String.contains?(m.content, "SELECT")
-    end)
-  end
-)
-```
-
-## Agent Lifecycle
-
-Agents are GenServer processes managed by a DynamicSupervisor.
-
-```elixir
-# Start an agent with tools and skills
-{:ok, agent} = ExAgent.start_agent(
-  provider: provider,
-  id: "my-agent",
-  tools: [weather_tool, search_tool],
-  skills: [sql_skill]
+  function: fn %{"city" => city} -> {:ok, "#{city}: 22C, sunny"} end
 )
 
-# Synchronous chat
-{:ok, response} = ExAgent.chat(agent, "What's the weather in Tokyo?")
-IO.puts(response.content)
-
-# Asynchronous chat
-task = ExAgent.chat_async(agent, "Tell me a story")
-{:ok, response} = Task.await(task)
-
-# Inspect conversation history
-context = ExAgent.get_context(agent)
-Enum.each(context.messages, fn msg ->
-  IO.puts("#{msg.role}: #{msg.content}")
-end)
-
-# Reset conversation
-ExAgent.reset(agent)
-
-# Stop the agent
-ExAgent.stop_agent(agent)
+{:ok, agent} = ExAgent.start_agent(provider: provider, tools: [weather_tool])
+{:ok, response} = ExAgent.chat(agent, "Should I take a coat in Tokyo?")
 ```
+
+A tool returns `{:ok, result}`, `{:error, reason}` (fed back to the LLM as an error), or
+any bare value — which is taken as the result.
+
+### Built-in provider tools
+
+Enable at agent creation (all calls) or per message (overrides the agent default).
+
+```elixir
+# Gemini: :google_search, :code_execution, :url_context
+{:ok, agent} = ExAgent.start_agent(provider: gemini, built_in_tools: [:google_search])
+{:ok, r} = ExAgent.chat(agent, "Compute fibonacci(20)", built_in_tools: [:code_execution])
+
+# OpenAI: :web_search. Two constraints come from OpenAI, not ExAgent —
+# only a *-search-preview model accepts it, and those models reject `temperature`.
+provider = ExAgent.Providers.OpenAI.new(
+  api_key: key, model: "gpt-4o-search-preview", temperature: nil
+)
+{:ok, agent} = ExAgent.start_agent(provider: provider, built_in_tools: [:web_search])
+
+# ...with location for localized results
+ExAgent.chat(agent, "Best restaurants nearby",
+  built_in_tools: [%{web_search: %{"city" => "Lisbon", "country" => "PT"}}])
+```
+
+ExAgent forwards `temperature` as configured rather than dropping it when a model objects
+— a silently ignored sampling parameter is worse than a 400 naming the field.
 
 ## Streaming
 
-Stream the assistant's response as a lazy `Stream` of text chunks — ideal for
-reasoning ("thinking") models, where a blocking call would return nothing until
-the full completion is ready.
-
 ```elixir
-# Agent-level: streams the final assistant turn
 agent
 |> ExAgent.chat_stream("Explain OTP supervision step by step")
-|> Enum.each(&IO.write/1)
+|> Enum.each(fn
+  %ExAgent.Chunk{type: :text_delta, text: text} -> IO.write(text)
+  %ExAgent.Chunk{type: :thinking_delta, text: t} -> IO.write(IO.ANSI.faint() <> t)
+  %ExAgent.Chunk{type: :done, finish_reason: reason} -> IO.puts("\n[#{reason}]")
+  _chunk -> :ok
+end)
 ```
 
-Tool-call turns (if any tools are configured) are resolved first without
-streaming; only the final assistant turn is streamed. When no tools are
-configured, the response is streamed directly. The conversation context is
-committed once the stream is fully consumed, so **the returned stream must be
-consumed**. While a stream is in flight the agent is busy — a concurrent request
-raises `ExAgent.StreamError` (agent-level) or returns `{:error, :busy}` (`chat/3`).
+| Chunk type | Carries |
+|---|---|
+| `:text_delta` | `:text` — a piece of the answer |
+| `:thinking_delta` | `:text` — a piece of the reasoning trace |
+| `:tool_call_delta` | `:index`, `:id`, `:name`, `:arguments` |
+| `:usage` | `:usage` — token counts |
+| `:done` | `:finish_reason`, plus `:error` when the stream failed |
 
-You can also stream directly from a provider, bypassing the agent and its
-context/tool loop:
+**Streaming never raises.** A busy agent, an HTTP error, a dropped connection, and an idle
+timeout all arrive as the terminal `:done` chunk carrying an `ExAgent.Error`. Every stream
+ends with exactly one `:done`, and whatever text already arrived stays valid.
 
 ```elixir
-provider = ExAgent.Providers.DeepSeek.new(api_key: key, model: "deepseek-reasoner")
+agent
+|> ExAgent.chat_stream("Summarize this")
+|> Enum.each(fn
+  %ExAgent.Chunk{type: :text_delta, text: t} -> IO.write(t)
+  %ExAgent.Chunk{type: :done, error: %ExAgent.Error{retryable?: true}} -> retry()
+  %ExAgent.Chunk{type: :done, error: %ExAgent.Error{} = e} -> Logger.error(e.message)
+  _ -> :ok
+end)
+```
+
+`:arguments` is a **raw JSON fragment**, not a decoded map — providers split function
+arguments across chunks, concatenated by `:index`. `collect/1` handles that:
+
+```elixir
+{:ok, response} = agent |> ExAgent.chat_stream("Explain OTP") |> ExAgent.collect()
+```
+
+Tool-call turns resolve first without streaming; only the final turn streams. Context is
+committed when the stream is **fully consumed**, so the stream must be consumed.
+
+Streaming straight from a provider skips the agent, its context, and the tool loop:
+
+```elixir
 {:ok, msg} = ExAgent.Message.new(role: :user, content: "Why is the sky blue?")
-
-provider
-|> ExAgent.Provider.stream([msg])
-|> Enum.each(&IO.write/1)
+provider |> ExAgent.Provider.stream([msg]) |> Enum.each(&IO.write(&1.text || ""))
 ```
 
-Streaming is text-only in this version: provider built-in/tool-call deltas are
-not surfaced as chunks.
+## Attachments
 
-## File Attachments
-
-Send images, PDFs, and other files alongside chat messages. Files become part of the conversation context, so the LLM can reference them in follow-up messages. You can either send files inline (base64-encoded) or upload them first for better performance.
+An attachment carries exactly one source — `:path`, `:data`, `:url`, or `:file_ref`. Files
+stay in conversation context, so follow-up turns can reference them.
 
 ```elixir
-# Attach a file by path (inline base64)
-{:ok, response} = ExAgent.chat(agent, "Describe this image",
-  files: [%{path: "photo.jpg", mime_type: "image/jpeg"}])
+ExAgent.chat(agent, "Describe this", files: [%{path: "photo.jpg"}])
+ExAgent.chat(agent, "What's here?",  files: [%{data: File.read!("d.png")}])
+ExAgent.chat(agent, "Read this",     files: [%{url: "https://cdn.example.com/inv.png"}])
+ExAgent.chat(agent, "Summarize",     files: [%{file_ref: ref}])
 
-# Attach raw binary data (inline base64)
-image_data = File.read!("diagram.png")
-{:ok, response} = ExAgent.chat(agent, "What's in this diagram?",
-  files: [%{data: image_data, mime_type: "image/png"}])
+# Mix sources and types freely
+ExAgent.chat(agent, "Compare these", files: [
+  %{path: "report.pdf"},
+  %{url: "https://cdn.example.com/data.csv"},
+  %{data: notes, mime_type: "text/markdown"}
+])
 
-# Multiple files of any type
-{:ok, response} = ExAgent.chat(agent, "Summarize these documents",
+# The LLM still remembers them next turn
+ExAgent.chat(agent, "Now focus on the second document")
+```
+
+### MIME types
+
+Inferred from the extension for `:path` and `:url` (query strings ignored) and from magic
+bytes for `:data`. **ExAgent never guesses** — when inference fails you get
+`{:error, %ExAgent.Error{type: :invalid_request}}` naming `:mime_type`.
+
+```elixir
+# inferred: image/png (the query string is ignored)
+ExAgent.chat(agent, "Read this", files: [%{url: "https://cdn.example.com/s.png?sig=abc"}])
+
+# explicit: the extension says nothing useful
+ExAgent.chat(agent, "Parse this", files: [%{path: "/tmp/export", mime_type: "text/csv"}])
+
+# explicit: a CDN URL with no extension at all
+ExAgent.chat(agent, "Describe this",
+  files: [%{url: "https://picsum.photos/id/237/800/600", mime_type: "image/jpeg"}])
+```
+
+### Inline or uploaded — chosen for you
+
+| Source | Delivery |
+|---|---|
+| `:url` | Referenced as-is — **never fetched** by ExAgent |
+| `:file_ref` | Referenced as-is — already uploaded |
+| Bytes under the inline ceiling | Base64 `data:` URI |
+| Bytes over it | Uploaded through the Files API, then referenced |
+
+**Gemini** inlines to 20 MB (50 MB for PDFs), then uses the Files API and waits for
+`ACTIVE` — large files and video sit in `PROCESSING`, and referencing them early fails.
+**OpenAI** inlines to 20 MB, then uploads and references by `file_id`.
+
+Uploads are cached by content hash, scoped per provider + base URL + API key, so the same
+file across turns uploads once and two accounts never share a reference. An expired
+`FileRef` is re-uploaded automatically.
+
+```elixir
+ExAgent.Providers.Gemini.new(api_key: key, upload_cache: false)   # opt out
+```
+
+`:path` reads only the file size up front; bytes are read at request time, so a 40 MB
+video is not carried in history every turn.
+
+### Video
+
+```elixir
+ExAgent.chat(agent, "Summarize both clips",
   files: [
-    %{path: "report.pdf", mime_type: "application/pdf"},
-    %{path: "data.csv", mime_type: "text/csv"},
-    %{path: "notes.md", mime_type: "text/markdown"}
+    %{url: "https://cdn.example.com/clip.mp4", fps: 2},
+    %{path: "talk.mp4", provider_opts: %{"start_offset" => "10s"}}
   ])
-
-# Files persist in conversation context — the LLM remembers them
-{:ok, _} = ExAgent.chat(agent, "Now focus on the second document")
 ```
 
-### Supported File Types
+`:fps` maps to Gemini's `video_metadata` and rides along on OpenAI-compatible video parts.
+Anything string-keyed under `:provider_opts` is merged into the media part verbatim.
+`:max_frames` is normalized but has no field in Gemini's API, so Gemini ignores it.
 
-| Type | MIME Type | OpenAI | Gemini | DeepSeek |
-|------|-----------|--------|--------|----------|
-| JPEG | `image/jpeg` | Yes | Yes | No |
-| PNG | `image/png` | Yes | Yes | No |
-| GIF | `image/gif` | Yes | Yes | No |
-| WebP | `image/webp` | Yes | Yes | No |
-| PDF | `application/pdf` | Yes | Yes | No |
-| TXT | `text/plain` | Yes | Yes | No |
-| Markdown | `text/markdown` | Yes | Yes | No |
-| CSV | `text/csv` | Yes | Yes | No |
+### Supported types
 
-> **Note:** DeepSeek does not support multimodal input. File attachments on DeepSeek agents are silently ignored.
+| Type | MIME | Modality |
+|---|---|---|
+| JPEG / PNG / GIF / WebP | `image/*` | `:image` |
+| PDF / TXT / Markdown / CSV | `application/pdf`, `text/*` | `:document` |
+| MP4 / QuickTime / WebM | `video/*` | `:video` |
+| MP3 / WAV / M4A / FLAC | `audio/*` | `:audio` |
 
-## File Uploads
+Custom providers declare support via `c:ExAgent.Provider.supported_modalities/1`. Omitting
+it means text only — a provider that has not opted in fails loudly rather than quietly
+discarding attachments.
 
-For large files or when you want to reuse the same file across multiple conversations, upload the file first and reference it later. This avoids sending base64-encoded data with every chat request.
+## Uploads
 
-### Upload and Reference (OpenAI)
+Upload once, reference many times — no base64 on every request.
 
 ```elixir
-provider = ExAgent.Providers.OpenAI.new(api_key: System.get_env("OPENAI_API_KEY"))
-
-# Upload a file from disk
 {:ok, ref} = ExAgent.upload_file(provider, "report.pdf", "application/pdf")
+{:ok, ref} = ExAgent.upload_data(provider, File.read!("shot.png"), "image/png",
+                                 filename: "shot.png")
 
-# Use the reference in chat — no base64 encoding, just a lightweight file ID
-{:ok, agent} = ExAgent.start_agent(provider: provider)
-{:ok, response} = ExAgent.chat(agent, "Summarize this report",
-  files: [%{file_ref: ref}])
+ExAgent.chat(agent, "Summarize this report", files: [%{file_ref: ref}])
+ExAgent.chat(agent, "What are the key findings?", files: [%{file_ref: ref}])
 
-# Reuse the same reference in another message
-{:ok, response} = ExAgent.chat(agent, "What are the key findings?",
-  files: [%{file_ref: ref}])
+ExAgent.FileRef.expired?(ref)   # Gemini files expire after 48h
+
+# Mix uploaded and inline in one message
+ExAgent.chat(agent, "Compare these", files: [
+  %{file_ref: video_ref},
+  %{path: "thumbnail.jpg"}
+])
 ```
 
-### Upload and Reference (Gemini)
+## Embeddings
+
+Stateless — takes a provider struct, no agent.
 
 ```elixir
-provider = ExAgent.Providers.Gemini.new(api_key: System.get_env("GEMINI_API_KEY"))
+provider = ExAgent.Providers.Gemini.new(api_key: System.fetch_env!("GEMINI_API_KEY"))
 
-# Upload a file — Gemini files expire after 48 hours
-{:ok, ref} = ExAgent.upload_file(provider, "photo.jpg", "image/jpeg")
+{:ok, docs}  = ExAgent.embed(provider, ["Elixir is functional", "OTP supervises"],
+                             task: :retrieval_document)
+{:ok, query} = ExAgent.embed(provider, "what supervises processes?",
+                             task: :retrieval_query)
 
-# Check if a reference has expired
-ExAgent.FileRef.expired?(ref)
-
-# Use in chat
-{:ok, agent} = ExAgent.start_agent(provider: provider)
-{:ok, response} = ExAgent.chat(agent, "Describe what you see",
-  files: [%{file_ref: ref}])
+docs.vectors
+|> Enum.map(&ExAgent.Embeddings.cosine_similarity(&1, hd(query.vectors)))
+|> Enum.with_index()
+|> Enum.max_by(&elem(&1, 0))
 ```
 
-### Upload Raw Binary Data
+### Store provenance with every vector
+
+> **Embedding spaces are model-scoped.** Vectors from different models, dimensions, or
+> tasks are not comparable, and mixing them degrades retrieval *silently* rather than
+> failing. The only fix is a full re-embed.
 
 ```elixir
-# If you already have the file contents in memory
-image_bytes = File.read!("screenshot.png")
-{:ok, ref} = ExAgent.upload_data(provider, image_bytes, "image/png",
-  filename: "screenshot.png")
+{:ok, result} = ExAgent.embed(provider, chunks, task: :retrieval_document)
+
+Enum.zip(chunks, result.vectors)
+|> Enum.map(fn {chunk, vector} ->
+  %{text: chunk, embedding: vector,
+    model: result.model, dimensions: result.dimensions, task: result.task}
+end)
 ```
 
-### Mix Inline and Uploaded Files
+That turns a later model change into a detectable migration instead of a quiet regression.
+
+### Tasks
+
+`:task` says what the embedding is *for*. Query and document are deliberately distinct —
+asymmetric retrieval needs both, and the wrong one degrades recall invisibly.
+
+`:retrieval_query` · `:retrieval_document` · `:similarity` · `:classification` ·
+`:clustering` · `:question_answering` · `:fact_verification` · `:code_query`
+
+Providers express this incompatibly and ExAgent translates: `gemini-embedding-001` takes a
+`taskType` enum; `gemini-embedding-2` has no such field and writes a text prefix (with
+`:title` filling the document template); **OpenAI has no task support and errors** rather
+than dropping it; OpenAI-compatible endpoints take a `task` body field.
 
 ```elixir
-# You can combine both approaches in a single message
-{:ok, ref} = ExAgent.upload_file(provider, "large_video.mp4", "video/mp4")
-{:ok, response} = ExAgent.chat(agent, "Compare these",
-  files: [
-    %{file_ref: ref},                                          # uploaded reference
-    %{path: "small_image.jpg", mime_type: "image/jpeg"}        # inline base64
-  ])
+ExAgent.embed(provider, [%{content: "body", title: "OTP Guide"}],
+  model: "gemini-embedding-2", task: :retrieval_document)
+
+# Jina task strings differ across model versions
+ExAgent.embed(jina, ["query"], task: :retrieval_query,
+  task_map: %{retrieval_query: "retrieval.query"})
 ```
 
-## Built-in Provider Tools
+### Models and dimensions
 
-Each LLM provider offers built-in tools that can be enabled via the `built_in_tools` option — either at agent creation (applies to all calls) or per-message (overrides agent default).
+`:model` is always the *embedding* model, never the provider's chat model — defaults are
+`text-embedding-3-small` (OpenAI) and `gemini-embedding-001` (Gemini).
 
-### Gemini
+`:dimensions` truncates where supported. `gemini-embedding-001` does not renormalize a
+truncated vector, so ExAgent rescales client-side; cosine similarity assumes unit length.
 
-```elixir
-# Google Search grounding — LLM can search the web for up-to-date info
-{:ok, agent} = ExAgent.start_agent(
-  provider: ExAgent.Providers.Gemini.new(api_key: gemini_key),
-  built_in_tools: [:google_search]
-)
-{:ok, response} = ExAgent.chat(agent, "What happened in tech news today?")
+An unrecognized Gemini embedding model **errors rather than guessing** — sending a
+`taskType` to a model that ignores it returns HTTP 200 with plausible floats that land in
+your index and retrieve worse forever. Use `:embedding_family` (`:task_type` or `:prefix`)
+to adopt a model this version predates.
 
-# Code execution — LLM can write and run Python code
-{:ok, response} = ExAgent.chat(agent, "Calculate fibonacci(20)",
-  built_in_tools: [:code_execution])
+## Multi-agent patterns
 
-# URL context — LLM can fetch and analyze web pages
-{:ok, response} = ExAgent.chat(agent, "Summarize this page",
-  built_in_tools: [:url_context])
+### Subagents — centralized orchestration
 
-# Combine multiple built-in tools
-{:ok, response} = ExAgent.chat(agent, "Research and compute",
-  built_in_tools: [:google_search, :code_execution])
-```
-
-Available Gemini built-in tools: `:google_search`, `:code_execution`, `:url_context`
-
-### OpenAI
-
-```elixir
-# Web search — LLM can search the web
-{:ok, agent} = ExAgent.start_agent(
-  provider: provider,
-  built_in_tools: [:web_search]
-)
-{:ok, response} = ExAgent.chat(agent, "What are the latest Elixir releases?")
-
-# Web search with user location for localized results
-{:ok, response} = ExAgent.chat(agent, "Best restaurants nearby",
-  built_in_tools: [%{web_search: %{"city" => "San Francisco", "country" => "US", "region" => "California"}}])
-```
-
-Available OpenAI built-in tools: `:web_search`
-
-### DeepSeek
-
-```elixir
-# Thinking/reasoning mode — enables chain-of-thought reasoning
-{:ok, agent} = ExAgent.start_agent(
-  provider: ExAgent.Providers.DeepSeek.new(
-    api_key: deepseek_key,
-    model: "deepseek-reasoner"
-  ),
-  built_in_tools: [:thinking]
-)
-{:ok, response} = ExAgent.chat(agent, "Solve this step by step: if x^2 + 3x - 10 = 0, what is x?")
-```
-
-Available DeepSeek built-in tools: `:thinking`
-
-## Tool Calling
-
-When you provide tools to an agent, the LLM can invoke them automatically. The agent runs a tool execution loop:
-
-1. Sends messages + tool definitions to the LLM
-2. If the LLM returns a `tool_call`, the agent executes the matching function
-3. Appends the tool result as a `:tool` message
-4. Calls the LLM again with the updated context
-5. Repeats until the LLM returns a final text response (max 10 iterations)
-
-```elixir
-{:ok, search_tool} = ExAgent.Tool.new(
-  name: "web_search",
-  description: "Search the web for information",
-  parameters: %{
-    "type" => "object",
-    "properties" => %{
-      "query" => %{"type" => "string", "description" => "Search query"}
-    },
-    "required" => ["query"]
-  },
-  function: fn %{"query" => query} ->
-    # Your search implementation here
-    {:ok, "Results for: #{query}"}
-  end
-)
-
-{:ok, calc_tool} = ExAgent.Tool.new(
-  name: "calculator",
-  description: "Evaluate a math expression",
-  parameters: %{
-    "type" => "object",
-    "properties" => %{
-      "expression" => %{"type" => "string"}
-    },
-    "required" => ["expression"]
-  },
-  function: fn %{"expression" => expr} ->
-    {result, _} = Code.eval_string(expr)
-    {:ok, to_string(result)}
-  end
-)
-
-{:ok, agent} = ExAgent.start_agent(
-  provider: provider,
-  tools: [search_tool, calc_tool]
-)
-
-# The LLM can now decide to call these tools during conversation
-{:ok, response} = ExAgent.chat(agent, "What is 42 * 37?")
-```
-
-## Multi-Agent Patterns
-
-### 1. Subagents (Centralized Orchestration)
-
-A main orchestrator agent delegates work to specialized subagents. Each subagent runs in isolation with a fresh context — no state leaks between calls.
+Each subagent runs in isolation with a fresh context; no state leaks between calls.
 
 ```elixir
 alias ExAgent.Patterns.Subagents
 
-# Define specialized subagent specs
-researcher = %{
-  name: "researcher",
-  description: "Research a topic and return findings",
-  provider: ExAgent.Providers.Gemini.new(api_key: gemini_key),
-  system_prompt: "You are a research specialist. Provide detailed findings.",
-  tools: []
-}
+researcher = %{name: "researcher", description: "Research a topic",
+               provider: gemini, system_prompt: "Provide detailed findings."}
+coder = %{name: "coder", description: "Write code",
+          provider: openai, system_prompt: "Write clean, tested code."}
 
-coder = %{
-  name: "coder",
-  description: "Write code based on specifications",
-  provider: ExAgent.Providers.OpenAI.new(api_key: openai_key),
-  system_prompt: "You are an expert programmer. Write clean, tested code.",
-  tools: []
-}
-
-# Convert subagent specs into tools for the orchestrator
-orchestrator_tools = Subagents.build_orchestrator_tools([researcher, coder])
-
-# The orchestrator uses these as regular tools — when the LLM calls
-# "researcher" or "coder", it spawns an ephemeral subagent call
+# As orchestrator tools — the LLM decides when to delegate
 {:ok, orchestrator} = ExAgent.start_agent(
-  provider: ExAgent.Providers.OpenAI.new(
-    api_key: openai_key,
-    system_prompt: "You orchestrate tasks. Use the researcher for facts and the coder for code."
-  ),
-  tools: orchestrator_tools
+  provider: openai,
+  tools: Subagents.build_orchestrator_tools([researcher, coder])
 )
+{:ok, r} = ExAgent.chat(orchestrator, "Research GenServers and write an example")
 
-{:ok, response} = ExAgent.chat(orchestrator, "Research Elixir GenServers and write an example")
+# Or drive them yourself
+{:ok, result} = Subagents.invoke_subagent(researcher, "Explain supervision trees")
 
-# You can also invoke subagents directly
-{:ok, result} = Subagents.invoke_subagent(researcher, "Explain OTP supervision trees")
-
-# Or invoke multiple in parallel
 results = Subagents.invoke_subagents_parallel([
   {researcher, "What is GenServer?"},
   {coder, "Write a GenServer example"}
 ])
-# => [{"researcher", {:ok, "GenServer is..."}}, {"coder", {:ok, "defmodule..."}}]
+#=> [{"researcher", {:ok, "..."}}, {"coder", {:ok, "..."}}]
 ```
 
-### 2. Skills (Progressive Disclosure)
+### Skills — progressive disclosure
 
-A single agent dynamically loads specialized system prompts and tools based on conversation context. Skills are evaluated before each LLM call.
+One agent loads specialized prompts and tools based on context, evaluated before each call.
 
 ```elixir
-# Define skills with activation functions
 {:ok, sql_skill} = ExAgent.Skill.new(
   name: "sql_expert",
-  system_prompt: "You are a SQL expert. Help users write and optimize queries.",
+  system_prompt: "You are a SQL expert.",
   tools: [sql_execute_tool],
   activation_fn: fn ctx ->
-    ctx.messages
-    |> Enum.any?(fn m ->
-      String.match?(m.content, ~r/SQL|SELECT|INSERT|UPDATE|DELETE|database/i)
-    end)
+    Enum.any?(ctx.messages, &String.match?(&1.content, ~r/SQL|SELECT|database/i))
   end
 )
 
-{:ok, python_skill} = ExAgent.Skill.new(
-  name: "python_expert",
-  system_prompt: "You are a Python expert. Write idiomatic Python code.",
-  tools: [python_run_tool],
-  activation_fn: fn ctx ->
-    ctx.messages
-    |> Enum.any?(fn m -> String.contains?(m.content, "Python") end)
-  end
-)
+{:ok, agent} = ExAgent.start_agent(provider: provider, skills: [sql_skill])
+{:ok, r} = ExAgent.chat(agent, "Write a query to find active users")  # skill activates
 
-# Start agent with skills — it begins as a generalist
-{:ok, agent} = ExAgent.start_agent(
-  provider: provider,
-  skills: [sql_skill, python_skill]
-)
-
-# When the user mentions SQL, the sql_expert skill activates automatically
-{:ok, response} = ExAgent.chat(agent, "Help me write a SQL query to find active users")
-# => Agent now uses the sql_expert system prompt and tools
-
-# Skills can also be loaded dynamically at runtime
-{:ok, new_skill} = ExAgent.Skill.new(name: "devops", system_prompt: "You are a DevOps expert.")
-ExAgent.Agent.load_skill(agent, new_skill)
+ExAgent.Agent.load_skill(agent, another_skill)   # add one at runtime
 ```
 
-### 3. Handoffs (State-Driven Transitions)
+### Handoffs — state-driven transitions
 
-The active agent changes dynamically. When the LLM invokes a handoff tool, control transfers to a different agent. The caller receives a `{:handoff, target, context}` tuple and decides where to route subsequent messages.
+The caller receives `{:handoff, target, context}` and decides routing, so agents stay
+decoupled.
 
 ```elixir
 alias ExAgent.Patterns.Handoff
 
-# Start specialized agents
-{:ok, sales_agent} = ExAgent.start_agent(
-  provider: ExAgent.Providers.OpenAI.new(
-    api_key: key,
-    system_prompt: "You are a sales specialist."
-  )
-)
+to_support = Handoff.build_handoff_tool("support", support_agent,
+               "Transfer when the user has a technical issue")
 
-{:ok, support_agent} = ExAgent.start_agent(
-  provider: ExAgent.Providers.OpenAI.new(
-    api_key: key,
-    system_prompt: "You are a technical support specialist."
-  )
-)
+{:ok, triage} = ExAgent.start_agent(provider: provider, tools: [to_support])
 
-# Build handoff tools
-handoff_to_support = Handoff.build_handoff_tool(
-  "support",
-  support_agent,
-  "Transfer to technical support when the user has a technical issue"
-)
-
-handoff_to_sales = Handoff.build_handoff_tool(
-  "sales",
-  sales_agent,
-  "Transfer to sales when the user wants to buy something"
-)
-
-# Start a triage agent with handoff tools
-{:ok, triage_agent} = ExAgent.start_agent(
-  provider: ExAgent.Providers.OpenAI.new(
-    api_key: key,
-    system_prompt: "You are a triage agent. Route users to the right department."
-  ),
-  tools: [handoff_to_support, handoff_to_sales]
-)
-
-# When the LLM decides to hand off, you get a handoff tuple
-case ExAgent.chat(triage_agent, "My app keeps crashing") do
+case ExAgent.chat(triage, "My app keeps crashing") do
   {:ok, response} ->
-    # Normal response — agent handled it directly
-    IO.puts("Normal response — agent handled it directly")
-    IO.puts(response.content)
+    response.content
 
-  {:handoff, target_pid, context} ->
-    # Transfer context and continue with the new agent
-    ExAgent.handoff(target_pid, context)
-    {:ok, response} = ExAgent.chat(target_pid, "My app keeps crashing")
-    IO.puts("Transfer context and continue with the new agent")
-    IO.puts(response.content)
+  {:handoff, target, context} ->
+    ExAgent.handoff(target, context)
+    {:ok, response} = ExAgent.chat(target, "My app keeps crashing")
+    response.content
 end
 ```
 
-### 4. Router (Parallel Dispatch & Synthesis)
+### Router — parallel dispatch and synthesis
 
-Classifies input, dispatches to multiple specialized agents in parallel, and synthesizes results into a single response.
+Routes are matched by `match_fn` (not an LLM classifier), dispatched in parallel, then
+synthesized.
 
 ```elixir
-alias ExAgent.Patterns.Router
-
-# Start specialized agents
-{:ok, code_agent} = ExAgent.start_agent(
-  provider: ExAgent.Providers.OpenAI.new(
-    api_key: key,
-    system_prompt: "Analyze code quality and suggest improvements."
-  )
-)
-
-{:ok, security_agent} = ExAgent.start_agent(
-  provider: ExAgent.Providers.OpenAI.new(
-    api_key: key,
-    system_prompt: "Analyze code for security vulnerabilities."
-  )
-)
-
-{:ok, perf_agent} = ExAgent.start_agent(
-  provider: ExAgent.Providers.Gemini.new(
-    api_key: gemini_key,
-    system_prompt: "Analyze code for performance issues."
-  )
-)
-
-# Define routes with match functions
 routes = [
-  %{name: "code_quality", agent: code_agent, match_fn: fn _ -> true end},
+  %{name: "quality",  agent: code_agent,     match_fn: fn _ -> true end},
   %{name: "security", agent: security_agent, match_fn: &String.contains?(&1, "security")},
-  %{name: "performance", agent: perf_agent, match_fn: &String.contains?(&1, "performance")}
+  %{name: "perf",     agent: perf_agent,     match_fn: &String.contains?(&1, "performance")}
 ]
 
-# Route dispatches to all matching agents in parallel
-{:ok, result} = ExAgent.route(
-  "Review this code for security and performance issues: def fetch(url), do: HTTPoison.get!(url)",
-  routes: routes,
-  timeout: 30_000
-)
+{:ok, result} = ExAgent.route("Review this for security issues: ...",
+                  routes: routes, timeout: 30_000)
 
-IO.puts(result)
-# ## code_quality
-# The function lacks error handling...
-#
-# ## security
-# Using get! will raise on HTTP errors...
-#
-# ## performance
-# Consider connection pooling...
-
-# Custom synthesizer
-{:ok, result} = ExAgent.route("analyze this code",
+# Default synthesizer joins with "## name" headers; override it
+{:ok, result} = ExAgent.route("analyze this",
   routes: routes,
   synthesizer: fn _input, results ->
-    results
-    |> Enum.map(fn {name, content} -> "**#{name}**: #{content}" end)
-    |> Enum.join("\n\n")
+    Enum.map_join(results, "\n\n", fn {name, content} -> "**#{name}**: #{content}" end)
   end
 )
+
+ExAgent.route("anything", routes: [%{name: "n", agent: a, match_fn: fn _ -> false end}])
+#=> {:error, :no_matching_routes}
 ```
 
-## Adding a Custom Provider
+---
 
-Any LLM can be integrated by defining a struct and implementing the `ExAgent.Provider` behaviour. Only `chat/3` is required; `upload/4` is optional (`@optional_callbacks`) for providers that support file uploads:
+## Recipes
+
+### Retry with backoff on transient failures
+
+```elixir
+def chat_with_retry(agent, input, attempt \\ 1) do
+  case ExAgent.chat(agent, input) do
+    {:error, %ExAgent.Error{retryable?: true}} when attempt < 4 ->
+      Process.sleep(trunc(:math.pow(2, attempt) * 500))
+      chat_with_retry(agent, input, attempt + 1)
+
+    other ->
+      other
+  end
+end
+```
+
+### RAG, end to end
+
+```elixir
+embedder = ExAgent.provider!(:embed)
+
+# Index: embed documents, persist provenance next to each vector
+{:ok, result} = ExAgent.embed(embedder, chunks, task: :retrieval_document)
+
+rows =
+  Enum.zip(chunks, result.vectors)
+  |> Enum.map(fn {text, vec} ->
+    %{text: text, embedding: vec, model: result.model, task: result.task}
+  end)
+
+Repo.insert_all(Chunk, rows)
+
+# Query: the *query* task, not the document task
+{:ok, q} = ExAgent.embed(embedder, question, task: :retrieval_query)
+[qv] = q.vectors
+
+context =
+  rows
+  |> Enum.sort_by(&ExAgent.Embeddings.cosine_similarity(&1.embedding, qv), :desc)
+  |> Enum.take(5)
+  |> Enum.map_join("\n\n", & &1.text)
+
+{:ok, agent} = ExAgent.start_agent(role: :chat)
+{:ok, answer} = ExAgent.chat(agent, """
+Answer using only this context. Say "I don't know" if it is not there.
+
+#{context}
+
+Question: #{question}
+""")
+```
+
+### Multi-tenant — a key per request
+
+```elixir
+def answer_for(tenant, question) do
+  provider = ExAgent.provider!(:chat, api_key: tenant.openai_key, model: tenant.model)
+  {:ok, agent} = ExAgent.start_agent(provider: provider)
+
+  try do
+    ExAgent.chat(agent, question)
+  after
+    ExAgent.stop_agent(agent)
+  end
+end
+```
+
+### Vision on a self-hosted container
+
+```elixir
+# config/runtime.exs
+config :ex_agent, :roles,
+  vision: {ExAgent.Providers.OpenAICompatible,
+             base_url: System.fetch_env!("MODAL_URL") <> "/v1",
+             model: "Qwen/Qwen3-VL-8B-Instruct",
+             modalities: [:text, :image, :video],
+             headers: [{"Modal-Key", System.fetch_env!("MODAL_KEY")},
+                       {"Modal-Secret", System.fetch_env!("MODAL_SECRET")}]}
+```
+
+```elixir
+# Images and video reach vLLM three ways: URL, local path (base64 data URI), raw bytes.
+ExAgent.chat_with(:vision, "What is in this image?",
+  files: [%{url: "https://cdn.example.com/x.jpg", mime_type: "image/jpeg"}])
+
+ExAgent.chat_with(:vision, "Describe this video.",
+  files: [%{path: "clip.mp4", fps: 1}])
+
+# Two attachments in one turn become two content parts
+ExAgent.chat_with(:vision, "Which of these is a chart?",
+  files: [%{data: png_bytes, mime_type: "image/png"},
+          %{url: "https://cdn.example.com/chart.png"}])
+```
+
+### Streaming into Phoenix LiveView
+
+```elixir
+def handle_event("ask", %{"q" => q}, socket) do
+  parent = self()
+
+  Task.start(fn ->
+    socket.assigns.agent
+    |> ExAgent.chat_stream(q)
+    |> Enum.each(fn
+      %ExAgent.Chunk{type: :text_delta, text: t} -> send(parent, {:delta, t})
+      %ExAgent.Chunk{type: :done, error: nil} -> send(parent, :done)
+      %ExAgent.Chunk{type: :done, error: e} -> send(parent, {:failed, e})
+      _ -> :ok
+    end)
+  end)
+
+  {:noreply, assign(socket, answer: "", streaming: true)}
+end
+
+def handle_info({:delta, t}, socket),
+  do: {:noreply, assign(socket, answer: socket.assigns.answer <> t)}
+
+def handle_info(:done, socket), do: {:noreply, assign(socket, streaming: false)}
+
+def handle_info({:failed, error}, socket),
+  do: {:noreply, socket |> put_flash(:error, Exception.message(error)) |> assign(streaming: false)}
+```
+
+### Testing without network
+
+Point a role at a stubbed provider and application code needs no injection plumbing.
+
+```elixir
+# config/test.exs
+config :ex_agent, :roles, chat: {MyApp.StubProvider, replies: ["canned reply"]}
+```
+
+Or stub the HTTP layer of a real provider — every provider exposes its `Req` client.
+`Req.new(plug: ...)` needs `{:plug, "~> 1.0", only: :test}` in your deps:
+
+```elixir
+provider = %ExAgent.Providers.OpenAI{
+  api_key: "sk-test", model: "gpt-4o",
+  req: Req.new(plug: fn conn ->
+    Req.Test.json(conn, %{"choices" => [
+      %{"message" => %{"role" => "assistant", "content" => "stubbed"}}
+    ]})
+  end)
+}
+```
+
+---
+
+## Custom providers
+
+Implement `ExAgent.Provider`. Only `chat/3` is required; `upload/4`, `stream/3`,
+`embed/3`, and `supported_modalities/1` are optional. `ExAgent.Error.from_result/2` does
+the status classification and keeps the original body in `:raw`.
 
 ```elixir
 defmodule MyApp.Providers.Anthropic do
-  @moduledoc "Custom Anthropic Claude provider."
-
   @behaviour ExAgent.Provider
 
-  defstruct [
-    :api_key, :req,
-    model: "claude-sonnet-4-20250514",
-    base_url: "https://api.anthropic.com/v1",
-    system_prompt: nil,
-    tools: []
-  ]
+  defstruct [:api_key, :req, model: "claude-sonnet-4-5", tools: [], system_prompt: nil]
 
   def new(opts) do
     provider = struct!(__MODULE__, opts)
     %{provider | req: Req.new(
-      base_url: provider.base_url,
-      headers: [
-        {"x-api-key", provider.api_key},
-        {"anthropic-version", "2023-06-01"}
-      ]
-    )}
+        base_url: "https://api.anthropic.com/v1",
+        headers: [{"x-api-key", provider.api_key}, {"anthropic-version", "2023-06-01"}]
+      )}
   end
 
   @impl true
@@ -682,94 +829,82 @@ defmodule MyApp.Providers.Anthropic do
     body = %{
       "model" => provider.model,
       "max_tokens" => 1024,
-      "messages" => Enum.map(messages, fn msg ->
-        %{"role" => to_string(msg.role), "content" => msg.content}
-      end)
+      "messages" => Enum.map(messages, &%{"role" => to_string(&1.role), "content" => &1.content})
     }
 
-    case Req.post(provider.req, url: "/messages", json: body) do
-      {:ok, %Req.Response{status: 200, body: %{"content" => [%{"text" => text} | _]}}} ->
-        {:ok, %ExAgent.Message{role: :assistant, content: text}}
+    Req.post(provider.req, url: "/messages", json: body)
+    |> ExAgent.Error.from_result(__MODULE__)
+    |> case do
+      {:ok, %{"content" => [%{"text" => text} | _]}} ->
+        {:ok, msg} = ExAgent.Message.new(role: :assistant, content: text)
+        {:ok, ExAgent.Response.new(msg)}
 
-      {:ok, %Req.Response{status: status, body: body}} ->
-        {:error, {status, body}}
+      {:ok, body} ->
+        {:error, ExAgent.Error.unexpected_response(body, __MODULE__)}
 
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _error} = failure ->
+        failure
     end
   end
+
+  @impl true
+  def supported_modalities(_provider), do: [:text, :image, :document]
 end
 
-# Use it like any other provider
 provider = MyApp.Providers.Anthropic.new(api_key: "sk-ant-...")
 {:ok, agent} = ExAgent.start_agent(provider: provider)
-{:ok, response} = ExAgent.chat(agent, "Hello Claude!")
 ```
+
+`chat/3` returns `{:ok, %ExAgent.Response{}}`, `{:tool_call, name, args}`, or
+`{:error, %ExAgent.Error{}}`.
 
 ## Architecture
 
-### Supervision Tree
-
 ```
 Application (ex_agent)
-  |
   ExAgent.AgentSupervisor (:one_for_one)
-    |
-    +-- ExAgent.AgentDynamicSupervisor (:one_for_one)
-    |     |
-    |     +-- ExAgent.Agent (id: "orchestrator")
-    |     +-- ExAgent.Agent (id: "coder")
-    |     +-- ExAgent.Agent (id: "reviewer")
-    |     +-- ... (any runtime agents)
-    |
-    +-- ExAgent.TaskSupervisor
-          |
-          +-- Task (async chat calls)
-          +-- Task (parallel subagent invocations)
-          +-- Task (router parallel dispatch)
+    ├── ExAgent.UploadCache               owns a public named ETS table
+    ├── ExAgent.AgentDynamicSupervisor    runtime agents
+    └── ExAgent.TaskSupervisor            async chat, parallel subagents, router dispatch
 ```
 
-### Design Decisions
+- **Behaviour dispatch** — `ExAgent.Provider` is both the contract and the dispatcher,
+  resolving the callback module from the struct
+- **Thin providers** — callbacks delegate to service modules; HTTP stays out of providers
+- **Modality gate in the dispatcher** — one place covers `chat/3` and `stream/3` for every
+  provider, instead of repeating the check per service
+- **Public ETS for the upload cache** — read directly by concurrent agents; routing through
+  the owning GenServer would serialize every read behind one process
+- **Tool loop off the GenServer** — it runs in a supervised Task so the agent stays
+  responsive to reads, but one turn at a time so context cannot race
+- **Subagents bypass the GenServer** — ephemeral stateless calls use `Provider.chat/3`
+- **Handoff returns to the caller** — agents stay decoupled; the caller routes
+- **Roles cache in `:persistent_term`** — free reads; writes only at boot, since each one
+  triggers a global GC scan
 
-- **Behaviour dispatch** — Provider structs implement the `ExAgent.Provider` behaviour; `ExAgent.Provider` doubles as a dispatcher that resolves the callback module from the struct
-- **Thin provider modules** — Provider `chat/4`/`upload/4` callbacks delegate to service modules under `services/`, keeping HTTP logic separate
-- **Tool loop in GenServer** — The `handle_call({:chat, ...})` contains the tool execution loop, processing one turn at a time to prevent race conditions on context
-- **Subagents bypass GenServer** — Ephemeral stateless calls use `Provider.chat/3` directly in supervised Tasks
-- **Handoff returns to caller** — Keeps agents decoupled; the caller decides routing after a handoff
-- **Router is a plain module** — Stateless classify-dispatch-synthesize flow needs no GenServer
-- **All patterns share one Agent GenServer** — Patterns augment behavior through state and tools, not separate process types
+## Testing
 
-### Project Structure
-
+```bash
+mix test    # full suite, fully mocked — no network, no credentials
 ```
-lib/
-  ex_agent.ex                     # Public API facade
-  ex_agent/
-    provider.ex                   # Provider behaviour + dispatcher
-    file_ref.ex                   # %FileRef{} struct (uploaded file reference)
-    message.ex                    # %Message{} struct
-    tool.ex                       # %Tool{} struct
-    context.ex                    # %Context{} struct
-    skill.ex                      # %Skill{} struct
-    agent.ex                      # Agent GenServer
-    supervisor.ex                 # AgentSupervisor
-    dynamic_supervisor.ex         # AgentDynamicSupervisor
-    providers/
-      openai.ex                   # OpenAI provider (chat + upload)
-      gemini.ex                   # Gemini provider (chat + upload)
-      deep_seek.ex                # DeepSeek provider (chat)
-    services/
-      openai_service.ex           # OpenAI chat HTTP calls via Req
-      openai_upload_service.ex    # OpenAI file upload (POST /v1/files)
-      gemini_service.ex           # Gemini chat HTTP calls via Req
-      gemini_upload_service.ex    # Gemini file upload (Files API)
-      deep_seek_service.ex        # DeepSeek HTTP calls via Req
-    patterns/
-      subagents.ex                # Centralized orchestration
-      skills.ex                   # Progressive disclosure
-      handoff.ex                  # State-driven transitions
-      router.ex                   # Parallel dispatch & synthesis
+
+`test/ex_agent/live_api_test.exs` runs against **real provider APIs**. It is tagged
+`:external` and excluded by default. Sections whose credentials are missing are skipped
+with a reason, so a partial setup reports what it did not cover.
+
+```bash
+export OPENAI_API_KEY=sk-...
+export GEMINI_API_KEY=AIza...
+export EX_AGENT_COMPAT_BASE_URL=https://your-app.modal.run/v1
+export EX_AGENT_COMPAT_MODEL=Qwen/Qwen3-VL-8B-Instruct
+
+mix test --only external                # everything you have keys for
+mix test --only external --only gemini  # also: openai, compat, roles, patterns
 ```
+
+That file is the only place where request shapes, field names, size thresholds, and enum
+values are checked against what providers actually accept; every other test mocks HTTP.
+Its `@moduledoc` documents every optional variable.
 
 ## License
 

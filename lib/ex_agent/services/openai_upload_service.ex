@@ -6,7 +6,9 @@ defmodule ExAgent.Services.OpenAIUploadService do
   an `ExAgent.FileRef` with the provider-assigned file ID.
   """
 
+  alias ExAgent.Error
   alias ExAgent.FileRef
+  alias ExAgent.Providers.OpenAI
 
   @doc """
   Uploads a file to OpenAI and returns a file reference.
@@ -19,7 +21,7 @@ defmodule ExAgent.Services.OpenAIUploadService do
   - `:purpose` - OpenAI file purpose (default: `"user_data"`)
   """
   @spec upload(Req.Request.t(), binary(), String.t(), keyword()) ::
-          {:ok, FileRef.t()} | {:error, term()}
+          {:ok, FileRef.t()} | {:error, Error.t()}
   def upload(req, file_data, mime_type, opts \\ []) do
     filename = Keyword.get(opts, :filename, "upload")
     purpose = Keyword.get(opts, :purpose, "user_data")
@@ -28,12 +30,14 @@ defmodule ExAgent.Services.OpenAIUploadService do
 
     body = build_multipart_body(boundary, purpose, filename, file_data, mime_type)
 
-    case Req.post(req,
-           url: "/files",
-           headers: [{"content-type", "multipart/form-data; boundary=#{boundary}"}],
-           body: body
-         ) do
-      {:ok, %Req.Response{status: 200, body: %{"id" => file_id} = resp_body}} ->
+    Req.post(req,
+      url: "/files",
+      headers: [{"content-type", "multipart/form-data; boundary=#{boundary}"}],
+      body: body
+    )
+    |> Error.from_result(OpenAI)
+    |> case do
+      {:ok, %{"id" => file_id} = resp_body} ->
         {:ok,
          %FileRef{
            provider: :openai,
@@ -42,11 +46,11 @@ defmodule ExAgent.Services.OpenAIUploadService do
            filename: resp_body["filename"] || filename
          }}
 
-      {:ok, %Req.Response{status: status, body: resp_body}} ->
-        {:error, {status, resp_body}}
+      {:ok, resp_body} ->
+        {:error, Error.unexpected_response(resp_body, OpenAI)}
 
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _error} = failure ->
+        failure
     end
   end
 
