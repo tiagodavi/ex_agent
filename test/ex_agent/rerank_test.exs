@@ -275,4 +275,34 @@ defmodule ExAgent.RerankTest do
       assert metadata.result == :ok
     end
   end
+
+  # A result the client cannot use is rejected at the boundary rather than handed
+  # on: an unscored entry survives every relevance floor, and an out-of-range
+  # index puts nil into a prompt.
+  describe "unusable server results" do
+    test "given a result with no score, then the response is rejected" do
+      provider = reranker([%{"index" => 0}])
+
+      assert {:error, %Error{type: :server}} = ExAgent.rerank(provider, "q", @docs)
+    end
+
+    test "given a non-numeric score, then the response is rejected" do
+      provider = reranker([%{"index" => 0, "relevance_score" => "high"}])
+
+      assert {:error, %Error{type: :server}} = ExAgent.rerank(provider, "q", @docs)
+    end
+
+    test "given an index outside the documents sent, then the response is rejected" do
+      provider = reranker([%{"index" => 99, "relevance_score" => 0.5}])
+
+      assert {:error, %Error{type: :server}} = ExAgent.rerank(provider, "q", @docs)
+    end
+
+    test "given valid indexes at both edges, then they are accepted" do
+      provider = reranker(scored([{2, 0.9}, {0, 0.1}]))
+
+      assert {:ok, %Reranking{results: [%{index: 2}, %{index: 0}]}} =
+               ExAgent.rerank(provider, "q", @docs)
+    end
+  end
 end

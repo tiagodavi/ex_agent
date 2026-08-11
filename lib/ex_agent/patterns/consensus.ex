@@ -100,28 +100,49 @@ defmodule ExAgent.Patterns.Consensus do
     (default: trim and downcase)
   - `:timeout` - per voter, in milliseconds (default: 5 minutes)
 
-  Returns `{:ok, verdict}`, or `{:error, :no_answers}` if every voter failed. Ties
+  Returns `{:ok, verdict}`, `{:error, {:no_answers, failures}}` if every voter was
+  asked and every one failed, or `{:error, :no_voters}` if there was nobody to ask
+  (an empty `:voters` list, or a non-positive `:samples`). Ties
   are broken by first appearance, so the winner is always the earliest of the
   joint-highest - deterministic, but check `:agreement` before trusting a tie.
   """
-  @spec run(String.t(), consensus_opts()) :: {:ok, verdict()} | {:error, term()}
+  @spec run(String.t(), consensus_opts()) ::
+          {:ok, verdict()} | {:error, {:no_answers, [term()]} | :no_voters}
   def run(prompt, opts) when is_binary(prompt) do
-    targets = voters(opts)
     normalize = Keyword.get(opts, :normalize, &default_normalize/1)
 
-    {answers, failures} = collect(prompt, targets, Keyword.get(opts, :timeout, @default_timeout))
+    with {:ok, targets} <- voters(opts) do
+      {answers, failures} =
+        collect(prompt, targets, Keyword.get(opts, :timeout, @default_timeout))
 
-    case answers do
-      [] -> {:error, :no_answers}
-      answers -> {:ok, tally(answers, failures, normalize)}
+      case answers do
+        # Every voter was asked and every one failed.
+        [] -> {:error, {:no_answers, failures}}
+        answers -> {:ok, tally(answers, failures, normalize)}
+      end
     end
   end
 
-  @spec voters(keyword()) :: [target()]
+  # An empty voter list or a non-positive sample count means nothing was asked,
+  # which is a different situation from every voter failing and deserves its own
+  # error rather than being reported as unanimous silence.
+  @spec voters(keyword()) :: {:ok, [target()]} | {:error, :no_voters}
   defp voters(opts) do
     case Keyword.fetch!(opts, :voters) do
-      targets when is_list(targets) -> targets
-      target -> List.duplicate(target, Keyword.get(opts, :samples, @default_samples))
+      [] ->
+        {:error, :no_voters}
+
+      targets when is_list(targets) ->
+        {:ok, targets}
+
+      target ->
+        case Keyword.get(opts, :samples, @default_samples) do
+          samples when is_integer(samples) and samples > 0 ->
+            {:ok, List.duplicate(target, samples)}
+
+          _invalid ->
+            {:error, :no_voters}
+        end
     end
   end
 
@@ -134,10 +155,11 @@ defmodule ExAgent.Patterns.Consensus do
       zip_input_on_exit: true
     )
     |> Enum.reduce({[], []}, fn
-      {:ok, {:ok, answer}}, {answers, failures} -> {answers ++ [answer], failures}
-      {:ok, {:error, reason}}, {answers, failures} -> {answers, failures ++ [reason]}
-      {:exit, {_target, reason}}, {answers, failures} -> {answers, failures ++ [reason]}
+      {:ok, {:ok, answer}}, {answers, failures} -> {[answer | answers], failures}
+      {:ok, {:error, reason}}, {answers, failures} -> {answers, [reason | failures]}
+      {:exit, {_target, reason}}, {answers, failures} -> {answers, [reason | failures]}
     end)
+    |> then(fn {answers, failures} -> {Enum.reverse(answers), Enum.reverse(failures)} end)
   end
 
   @spec tally([String.t()], [term()], (String.t() -> term())) :: verdict()

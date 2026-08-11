@@ -268,11 +268,15 @@ defmodule ExAgent.Patterns.WorkflowsTest do
     test "given every section failing, then it does not silently reduce nothing" do
       provider = provider(fn _prompt -> {:error, 500} end)
 
-      assert {:error, :all_sections_failed} =
+      # The failures travel with the error: "everything failed" alone is not
+      # debuggable.
+      assert {:error, {:all_sections_failed, failures}} =
                MapReduce.run(["a", "b"], provider,
                  map: & &1,
                  reduce: fn _outputs -> {:ok, :never} end
                )
+
+      assert [{0, %ExAgent.Error{}}, {1, %ExAgent.Error{}}] = failures
     end
 
     test "given a failing reducer, then the error surfaces" do
@@ -339,9 +343,17 @@ defmodule ExAgent.Patterns.WorkflowsTest do
       assert_in_delta verdict.agreement, 2 / 3, 1.0e-9
     end
 
-    test "given every voter failing, then there is no answer to report" do
-      assert {:error, :no_answers} =
+    test "given every voter failing, then the failures come back with the error" do
+      assert {:error, {:no_answers, failures}} =
                Consensus.run("q", voters: provider(fn _prompt -> {:error, 500} end), samples: 2)
+
+      assert length(failures) == 2
+    end
+
+    # Nobody was asked, which is a different situation from everyone failing.
+    test "given no voters at all, then it says so rather than reporting silence" do
+      assert {:error, :no_voters} = Consensus.run("q", voters: [])
+      assert {:error, :no_voters} = Consensus.run("q", voters: echoing("a"), samples: 0)
     end
 
     test "given some voters failing, then the survivors decide and failures are kept" do
@@ -369,6 +381,49 @@ defmodule ExAgent.Patterns.WorkflowsTest do
       for _attempt <- 1..5 do
         assert {:ok, %{answer: "beta", agreement: 0.5}} = Consensus.run("q", voters: voters)
       end
+    end
+  end
+
+  describe "release audit fixes" do
+    # `nil >= 0.5` is `true` in Elixir term ordering, so an unscored result used to
+    # survive every relevance floor.
+    test "given a nil score, then above/2 drops it instead of keeping it" do
+      result = %ExAgent.Reranking{
+        results: [%{index: 0, score: nil}, %{index: 1, score: 0.9}],
+        model: "m",
+        provider: __MODULE__
+      }
+
+      assert ExAgent.Reranking.above(result, 0.5).results == [%{index: 1, score: 0.9}]
+    end
+
+    test "given an out-of-range index, then take/2 raises instead of yielding nil" do
+      result = %ExAgent.Reranking{
+        results: [%{index: 5, score: 0.9}],
+        model: "m",
+        provider: __MODULE__
+      }
+
+      assert_raise ArgumentError, ~r/outside the 1 documents given/, fn ->
+        ExAgent.Reranking.take(result, ["only one"])
+      end
+    end
+
+    test "given a bad ceiling, then start_link raises rather than crashing mid-turn" do
+      base = [provider: echoing("hi")]
+
+      assert_raise ArgumentError, ~r/:max_history must be a positive integer/, fn ->
+        ExAgent.Agent.start_link(base ++ [max_history: 0])
+      end
+
+      assert_raise ArgumentError, ~r/:max_tool_iterations must be a positive integer/, fn ->
+        ExAgent.Agent.start_link(base ++ [max_tool_iterations: -1])
+      end
+
+      # A valid one still starts.
+      assert {:ok, agent} = ExAgent.Agent.start_link(base ++ [max_history: 4])
+      assert Process.alive?(agent)
+      GenServer.stop(agent)
     end
   end
 end

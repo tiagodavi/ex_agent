@@ -91,8 +91,9 @@ defmodule ExAgent.Patterns.MapReduce do
     which is a poor proxy for how many requests a provider will tolerate - lower
     it if you are being rate limited)
 
-  Returns `{:ok, result}`, or `{:error, :all_sections_failed}` when nothing
-  survived to reduce.
+  Returns `{:ok, result}`, or `{:error, {:all_sections_failed, failures}}` when
+  nothing survived to reduce - the failures come with it, since "everything failed"
+  on its own does not say why.
   """
   @spec run([section()], target(), map_reduce_opts()) ::
           {:ok, result()} | {:error, term()}
@@ -102,14 +103,14 @@ defmodule ExAgent.Patterns.MapReduce do
 
     {outputs, failures} = map_sections(sections, target, build_prompt, opts)
 
-    cond do
-      outputs == [] and sections != [] ->
-        {:error, :all_sections_failed}
-
-      true ->
-        with {:ok, output} <- apply_reduce(reduce, outputs) do
-          {:ok, %{output: output, sections: length(outputs), failures: failures}}
-        end
+    if outputs == [] and sections != [] do
+      # Carrying the failures is the difference between a debuggable error and
+      # "all sections failed", which says nothing about why.
+      {:error, {:all_sections_failed, failures}}
+    else
+      with {:ok, output} <- apply_reduce(reduce, outputs) do
+        {:ok, %{output: output, sections: length(outputs), failures: failures}}
+      end
     end
   end
 
@@ -129,16 +130,19 @@ defmodule ExAgent.Patterns.MapReduce do
       # out" is not a debuggable statement.
       zip_input_on_exit: true
     )
+    # Prepend and reverse once: appending with ++ per section is quadratic, and a
+    # sectioned input is exactly the case where the list is long.
     |> Enum.reduce({[], []}, fn
       {:ok, {_index, {:ok, output}}}, {outputs, failures} ->
-        {outputs ++ [output], failures}
+        {[output | outputs], failures}
 
       {:ok, {index, {:error, reason}}}, {outputs, failures} ->
-        {outputs, failures ++ [{index, reason}]}
+        {outputs, [{index, reason} | failures]}
 
       {:exit, {{_section, index}, reason}}, {outputs, failures} ->
-        {outputs, failures ++ [{index, reason}]}
+        {outputs, [{index, reason} | failures]}
     end)
+    |> then(fn {outputs, failures} -> {Enum.reverse(outputs), Enum.reverse(failures)} end)
   end
 
   @spec apply_reduce(reduce(), [String.t()]) :: {:ok, term()} | {:error, term()}

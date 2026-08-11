@@ -68,9 +68,26 @@ defmodule ExAgent.Agent do
   """
   @spec start_link(agent_opts()) :: GenServer.on_start()
   def start_link(opts) do
-    opts = resolve_role(opts)
+    opts = opts |> resolve_role() |> validate_positive!(:max_tool_iterations)
+    opts = validate_positive!(opts, :max_history)
     name = opts[:name]
     GenServer.start_link(__MODULE__, opts, name: name)
+  end
+
+  # A bad ceiling used to be accepted here and then crash the agent at the end of
+  # its first turn, which points at the wrong line entirely.
+  @spec validate_positive!(agent_opts(), atom()) :: agent_opts()
+  defp validate_positive!(opts, key) do
+    case Keyword.get(opts, key) do
+      nil ->
+        opts
+
+      value when is_integer(value) and value > 0 ->
+        opts
+
+      value ->
+        raise ArgumentError, ":#{key} must be a positive integer, got #{inspect(value)}"
+    end
   end
 
   # Resolved here rather than in init/1 so both the direct call and the

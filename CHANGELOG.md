@@ -1,4 +1,4 @@
-## v0.3.0 (unreleased)
+## v0.3.0 (2026-08-11)
 
 ### Changed
 
@@ -27,6 +27,35 @@
   removed `:task_map` was trying to paper over. the `OpenAICompatibleEmbedService` module
   is gone; the provider is chat-only. Use `ExAgent.Providers.JinaV5`, or a provider of your
   own, for embeddings against a self-hosted model.
+
+### Fixed
+
+Found in a pre-release audit of the code added for this version.
+
+- **`ExAgent.Reranking.above/2` kept unscored results.** In Elixir's term ordering every
+  atom sorts above every number, so `nil >= 0.5` is `true` and a result with no score
+  survived any relevance floor. `above/2` now requires a numeric score, and the reranker
+  service rejects the whole response if a result has no numeric `relevance_score`, so the
+  situation cannot arise from a server that omits one.
+
+- **`Reranking.take/2` returned `nil` for an out-of-range index**, which would put the
+  string "nil" into a prompt. It now raises, naming the mismatch, and the service rejects
+  a response whose indexes fall outside the documents that were sent.
+
+- **A bad `:max_history` or `:max_tool_iterations` crashed the agent mid-turn.**
+  `max_history: 0` was accepted by `start_link/1` and then raised a `FunctionClauseError`
+  at the end of the first turn, pointing at the wrong line entirely. Both are validated
+  when the agent starts.
+
+- **`MapReduce` reported `{:error, :all_sections_failed}` with no reason.** The failures
+  now travel with it, since "everything failed" alone cannot be debugged.
+
+- **`Consensus` reported `{:error, :no_answers}` when nobody had been asked.** An empty
+  `:voters` list or a non-positive `:samples` is now `{:error, :no_voters}`, distinct from
+  every voter having been asked and failed, which returns the failures alongside.
+
+- `MapReduce` and `Consensus` accumulated results with `++` per item, which is quadratic
+  in the number of sections or voters. They prepend and reverse once.
 
 ### Changed
 

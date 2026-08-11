@@ -59,7 +59,7 @@ defmodule ExAgent.Services.JinaRerankerService do
       |> Req.post(url: "/v1/rerank", json: body, receive_timeout: :timer.minutes(5))
       |> Error.from_result(JinaRerankerM0)
       |> case do
-        {:ok, response} -> build_result(response, provider)
+        {:ok, response} -> build_result(response, provider, length(documents))
         {:error, _error} = failure -> failure
       end
     end
@@ -162,20 +162,36 @@ defmodule ExAgent.Services.JinaRerankerService do
      )}
   end
 
-  @spec build_result(map(), JinaRerankerM0.t()) :: {:ok, Reranking.t()} | {:error, Error.t()}
-  defp build_result(%{"results" => results} = body, provider) when is_list(results) do
-    {:ok,
-     %Reranking{
-       results: Enum.map(results, &normalize_result/1),
-       model: body["model"] || provider.model,
-       provider: JinaRerankerM0,
-       # The server reports no token counts.
-       usage: %{}
-     }}
+  @spec build_result(map(), JinaRerankerM0.t(), non_neg_integer()) ::
+          {:ok, Reranking.t()} | {:error, Error.t()}
+  defp build_result(%{"results" => results} = body, provider, count) when is_list(results) do
+    # A result with no numeric score, or an index outside the input, is not
+    # usable: `nil >= threshold` is *true* in Elixir term ordering, so an
+    # unscored entry would survive every relevance floor, and a bad index would
+    # put `nil` into a prompt. Both are rejected here rather than downstream.
+    if Enum.all?(results, &valid_result?(&1, count)) do
+      {:ok,
+       %Reranking{
+         results: Enum.map(results, &normalize_result/1),
+         model: body["model"] || provider.model,
+         provider: JinaRerankerM0,
+         # The server reports no token counts.
+         usage: %{}
+       }}
+    else
+      {:error, Error.unexpected_response(body, JinaRerankerM0)}
+    end
   end
 
-  defp build_result(body, _provider),
+  defp build_result(body, _provider, _count),
     do: {:error, Error.unexpected_response(body, JinaRerankerM0)}
+
+  @spec valid_result?(term(), non_neg_integer()) :: boolean()
+  defp valid_result?(%{"index" => index, "relevance_score" => score}, count)
+       when is_integer(index) and is_number(score),
+       do: index >= 0 and index < count
+
+  defp valid_result?(_result, _count), do: false
 
   @spec normalize_result(map()) :: Reranking.result()
   defp normalize_result(result) do

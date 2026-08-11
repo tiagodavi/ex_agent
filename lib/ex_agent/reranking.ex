@@ -80,7 +80,19 @@ defmodule ExAgent.Reranking do
   """
   @spec take(t(), [term()]) :: [term()]
   def take(%__MODULE__{results: results}, documents) do
-    Enum.map(results, fn %{index: index} -> Enum.at(documents, index) end)
+    count = length(documents)
+
+    Enum.map(results, fn %{index: index} ->
+      # Silently returning nil here would put "nil" in a prompt. An out-of-range
+      # index means this is not the list that was ranked.
+      if index < 0 or index >= count do
+        raise ArgumentError,
+              "result index #{index} is outside the #{count} documents given; " <>
+                "take/2 needs the same list that was ranked"
+      end
+
+      Enum.at(documents, index)
+    end)
   end
 
   @doc """
@@ -103,8 +115,10 @@ defmodule ExAgent.Reranking do
       iex> ExAgent.Reranking.above(result, 0.5).results
       [%{index: 0, score: 0.9}]
   """
-  @spec above(t(), float()) :: t()
-  def above(%__MODULE__{results: results} = reranking, threshold) do
-    %{reranking | results: Enum.filter(results, &(&1.score >= threshold))}
+  @spec above(t(), number()) :: t()
+  def above(%__MODULE__{results: results} = reranking, threshold) when is_number(threshold) do
+    # `is_number/1` first: in Elixir's term ordering every atom sorts above every
+    # number, so a `nil` score would pass `>= threshold` and survive the filter.
+    %{reranking | results: Enum.filter(results, &(is_number(&1.score) and &1.score >= threshold))}
   end
 end
