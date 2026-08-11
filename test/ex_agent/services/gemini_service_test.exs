@@ -49,7 +49,7 @@ defmodule ExAgent.Services.GeminiServiceTest do
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
 
-      assert {:ok, %Message{role: :assistant, content: "Hello!"}} =
+      assert {:ok, %ExAgent.Response{content: "Hello!"}} =
                GeminiService.chat(provider, [msg])
     end
 
@@ -91,7 +91,9 @@ defmodule ExAgent.Services.GeminiServiceTest do
         end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
-      assert {:error, {403, _}} = GeminiService.chat(provider, [msg])
+
+      assert {:error, %ExAgent.Error{type: :auth, status: 403}} =
+               GeminiService.chat(provider, [msg])
     end
 
     test "returns error for unexpected response format" do
@@ -102,7 +104,7 @@ defmodule ExAgent.Services.GeminiServiceTest do
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
 
-      assert {:error, {:unexpected_response, _}} =
+      assert {:error, %ExAgent.Error{type: :server}} =
                GeminiService.chat(provider, [msg])
     end
 
@@ -113,7 +115,9 @@ defmodule ExAgent.Services.GeminiServiceTest do
         end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
-      assert {:error, {500, _}} = GeminiService.chat(provider, [msg])
+
+      assert {:error, %ExAgent.Error{type: :server, status: 500, retryable?: true}} =
+               GeminiService.chat(provider, [msg])
     end
   end
 
@@ -336,6 +340,64 @@ defmodule ExAgent.Services.GeminiServiceTest do
         )
 
       assert {:ok, _} = GeminiService.chat(provider, [msg])
+    end
+  end
+
+  describe "url attachments" do
+    test "given a url attachment, then it is sent as file_data with no download" do
+      test_pid = self()
+
+      provider =
+        build_provider(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          [part | _] = hd(parsed["contents"])["parts"]
+          send(test_pid, {:part, part})
+          Req.Test.json(conn, success_response("Seen"))
+        end)
+
+      {:ok, msg} =
+        Message.new(
+          role: :user,
+          content: "What is this?",
+          attachments: [%{url: "https://cdn.example.com/invoice.png"}]
+        )
+
+      assert {:ok, _} = GeminiService.chat(provider, [msg])
+
+      assert_received {:part, part}
+
+      assert part == %{
+               "file_data" => %{
+                 "file_uri" => "https://cdn.example.com/invoice.png",
+                 "mime_type" => "image/png"
+               }
+             }
+
+      # No base64 payload was produced, so nothing was fetched or encoded.
+      refute Map.has_key?(part, "inline_data")
+    end
+
+    test "given a url with a query string, then the mime type is still inferred" do
+      test_pid = self()
+
+      provider =
+        build_provider(fn conn ->
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
+          send(test_pid, {:part, hd(hd(parsed["contents"])["parts"])})
+          Req.Test.json(conn, success_response("Ok"))
+        end)
+
+      {:ok, msg} =
+        Message.new(
+          role: :user,
+          content: "Read it",
+          attachments: [%{url: "https://cdn.example.com/report.pdf?sig=abc123"}]
+        )
+
+      assert {:ok, _} = GeminiService.chat(provider, [msg])
+      assert_received {:part, %{"file_data" => %{"mime_type" => "application/pdf"}}}
     end
   end
 

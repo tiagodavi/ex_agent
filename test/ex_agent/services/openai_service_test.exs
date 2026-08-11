@@ -58,7 +58,7 @@ defmodule ExAgent.Services.OpenAIServiceTest do
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
 
-      assert {:ok, %Message{role: :assistant, content: "Hello there!"}} =
+      assert {:ok, %ExAgent.Response{content: "Hello there!"}} =
                OpenAIService.chat(provider, [msg])
     end
 
@@ -103,7 +103,9 @@ defmodule ExAgent.Services.OpenAIServiceTest do
         end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
-      assert {:error, {401, _}} = OpenAIService.chat(provider, [msg])
+
+      assert {:error, %ExAgent.Error{type: :auth, status: 401}} =
+               OpenAIService.chat(provider, [msg])
     end
 
     test "returns error for unexpected response format" do
@@ -114,7 +116,7 @@ defmodule ExAgent.Services.OpenAIServiceTest do
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
 
-      assert {:error, {:unexpected_response, _}} =
+      assert {:error, %ExAgent.Error{type: :server}} =
                OpenAIService.chat(provider, [msg])
     end
 
@@ -126,7 +128,9 @@ defmodule ExAgent.Services.OpenAIServiceTest do
         end)
 
       {:ok, msg} = Message.new(role: :user, content: "Hi")
-      assert {:error, {500, _}} = OpenAIService.chat(provider, [msg])
+
+      assert {:error, %ExAgent.Error{type: :server, status: 500, retryable?: true}} =
+               OpenAIService.chat(provider, [msg])
     end
   end
 
@@ -412,6 +416,59 @@ defmodule ExAgent.Services.OpenAIServiceTest do
         )
 
       assert {:ok, _} = OpenAIService.chat(provider, [msg])
+    end
+  end
+
+  describe "url attachments" do
+    setup do
+      test_pid = self()
+
+      plug = fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        parsed = Jason.decode!(body)
+        [part | _] = hd(parsed["messages"])["content"]
+        send(test_pid, {:part, part})
+        Req.Test.json(conn, success_response("Seen"))
+      end
+
+      %{plug: plug}
+    end
+
+    test "given an image url, then it is sent as image_url with no base64", %{plug: plug} do
+      provider = build_provider(plug)
+
+      {:ok, msg} =
+        Message.new(
+          role: :user,
+          content: "What is this?",
+          attachments: [%{url: "https://cdn.example.com/invoice.png"}]
+        )
+
+      assert {:ok, _} = OpenAIService.chat(provider, [msg])
+
+      assert_received {:part, part}
+
+      assert part == %{
+               "type" => "image_url",
+               "image_url" => %{"url" => "https://cdn.example.com/invoice.png"}
+             }
+    end
+
+    test "given a document url, then it is sent as file_url", %{plug: plug} do
+      provider = build_provider(plug)
+
+      {:ok, msg} =
+        Message.new(
+          role: :user,
+          content: "Summarize",
+          attachments: [%{url: "https://cdn.example.com/report.pdf"}]
+        )
+
+      assert {:ok, _} = OpenAIService.chat(provider, [msg])
+
+      assert_received {:part, %{"type" => "file", "file" => file}}
+      assert file["file_url"] == "https://cdn.example.com/report.pdf"
+      assert file["filename"] == "report.pdf"
     end
   end
 

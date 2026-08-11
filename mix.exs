@@ -1,7 +1,7 @@
 defmodule ExAgent.MixProject do
   use Mix.Project
 
-  @version "0.2.0"
+  @version "0.3.0"
   @url_docs "https://hexdocs.pm/ex_agent"
   @url_github "https://github.com/tiagodavi/ex_agent"
 
@@ -11,7 +11,7 @@ defmodule ExAgent.MixProject do
 
   defp package() do
     [
-      files: ~w(lib .formatter.exs mix.exs README* LICENSE* CHANGELOG*),
+      files: ~w(lib .formatter.exs mix.exs README* LICENSE* CHANGELOG* NOTICE),
       licenses: ["Apache-2.0"],
       maintainers: [
         "Tiago D S Batista"
@@ -27,9 +27,58 @@ defmodule ExAgent.MixProject do
     [
       source_ref: "v#{@version}",
       source_url: @url_github,
-      main: "ExAgent",
+      main: "readme",
       extra_section: "guides",
-      extras: ["README.md", "NOTICE", "LICENSE"]
+      extras: ["README.md", "CHANGELOG.md", "NOTICE", "LICENSE"],
+      # Grouped to mirror the README's sections, so the sidebar reads the same
+      # way as the guide.
+      groups_for_modules: [
+        "Core API": [ExAgent],
+        "Providers & roles": [
+          ExAgent.Provider,
+          ExAgent.Providers.OpenAI,
+          ExAgent.Providers.Gemini,
+          ExAgent.Providers.OpenAICompatible,
+          ExAgent.Roles
+        ],
+        Conversations: [
+          ExAgent.Agent,
+          ExAgent.Message,
+          ExAgent.Response,
+          ExAgent.Chunk,
+          ExAgent.Context,
+          ExAgent.Tool,
+          ExAgent.Skill,
+          ExAgent.Error
+        ],
+        Files: [
+          ExAgent.Attachment,
+          ExAgent.Source,
+          ExAgent.FileRef,
+          ExAgent.UploadCache
+        ],
+        Embeddings: [ExAgent.Embeddings],
+        "Multi-agent patterns": [
+          ExAgent.Patterns.Subagents,
+          ExAgent.Patterns.Skills,
+          ExAgent.Patterns.Handoff,
+          ExAgent.Patterns.Router
+        ],
+        Internals: [
+          ExAgent.SSE,
+          ExAgent.AgentSupervisor,
+          ExAgent.AgentDynamicSupervisor,
+          ExAgent.Services.OpenAIService,
+          ExAgent.Services.OpenAIEmbedService,
+          ExAgent.Services.OpenAIUploadService,
+          ExAgent.Services.OpenAICompatibleService,
+          ExAgent.Services.OpenAICompatibleEmbedService,
+          ExAgent.Services.GeminiService,
+          ExAgent.Services.GeminiEmbedService,
+          ExAgent.Services.GeminiUploadService,
+          ExAgent.Services.Streaming
+        ]
+      ]
     ]
   end
 
@@ -65,6 +114,7 @@ defmodule ExAgent.MixProject do
     [
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
+      {:mime, "~> 2.0"},
       {:nimble_options, "~> 1.1"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:mox, "~> 1.1", only: :test},

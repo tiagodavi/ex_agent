@@ -1,168 +1,150 @@
-defmodule ExAgent.StreamError do
-  @moduledoc """
-  Raised when a streaming request fails (non-200 status or transport error).
-
-  The error surfaces lazily, when the stream is consumed.
-  """
-
-  defexception [:status, :body]
-
-  @impl true
-  def message(%{status: nil, body: body}) do
-    "stream request failed: #{inspect(body)}"
-  end
-
-  def message(%{status: status, body: body}) do
-    "stream request failed with status #{status}: #{inspect(body)}"
-  end
-end
-
 defmodule ExAgent.Services.Streaming do
   @moduledoc """
-  Shared Server-Sent Events (SSE) streaming helper for LLM providers.
+  Shared SSE stream transport for LLM providers.
 
-  Wraps a `Req` request made with `into: :self` in a lazy `Stream` that yields
-  text chunks. SSE framing (buffering split frames, `data:` prefixes, `[DONE]`
-  termination) lives here so provider services only supply a per-provider parser
-  that extracts the text delta from a decoded frame.
+  Wraps a `Req` request made with `into: :self` in a lazy `Stream` of
+  `ExAgent.Chunk` structs. Framing lives in `ExAgent.SSE`; this module owns the
+  transport, so provider services only supply a mapper turning one decoded frame
+  into zero or more chunks.
+
+  Nothing here raises. A non-200 response, a transport failure, or an idle
+  timeout all terminate the stream with a `:done` chunk carrying an
+  `ExAgent.Error` — whatever was already emitted stays valid.
   """
 
-  alias ExAgent.StreamError
+  alias ExAgent.{Chunk, Error, SSE}
 
-  @type chunk_parser :: (map() -> String.t() | nil)
+  # One frame can legitimately carry text, usage, and a finish reason at once,
+  # so a mapper returns a list rather than a single value.
+  @type mapper :: (map() -> [Chunk.t()])
+
+  # Long enough for a slow model to think, short enough that a dead connection
+  # does not hang a caller forever.
+  @idle_timeout :timer.minutes(5)
 
   @doc """
-  Streams an SSE response as a lazy enumerable of text chunks.
+  Streams an SSE response as a lazy enumerable of `ExAgent.Chunk` structs.
 
-  `req_opts` are passed to `Req.post/2` (e.g. `url:`, `json:`, `receive_timeout:`);
-  `into: :self` is added automatically. `chunk_parser` receives each decoded SSE
-  frame (a map) and returns the text to emit, or `nil` to skip it.
-
-  Raises `ExAgent.StreamError` (when consumed) on a non-200 response.
+  `req_opts` are passed to `Req.post/2`; `into: :self` is added automatically.
+  `provider` names the module in any error chunk. The stream always ends with
+  exactly one `:done` chunk.
   """
-  @spec stream(Req.Request.t(), keyword(), chunk_parser()) :: Enumerable.t()
-  def stream(req, req_opts, chunk_parser) do
+  @spec stream(Req.Request.t(), keyword(), module(), mapper()) :: Enumerable.t()
+  def stream(req, req_opts, provider, mapper) do
     Stream.resource(
-      fn -> start(req, req_opts) end,
-      fn state -> next(state, chunk_parser) end,
+      fn -> start(req, req_opts, provider) end,
+      fn state -> next(state, mapper) end,
       &stop/1
     )
   end
 
-  @doc false
-  # Splits an SSE buffer into complete events plus the trailing partial event.
-  # Events are separated by a blank line ("\n\n"); the last element is always the
-  # (possibly empty) incomplete remainder held back for the next chunk.
-  @spec take_events(binary()) :: {[binary()], binary()}
-  def take_events(buffer) do
-    parts = String.split(buffer, "\n\n")
-    {complete, [rest]} = Enum.split(parts, -1)
-    {complete, rest}
-  end
+  @spec start(Req.Request.t(), keyword(), module()) :: map() | {:fail, Chunk.t()}
+  defp start(req, req_opts, provider) do
+    case Req.post(req, [into: :self] ++ req_opts) do
+      {:ok, %Req.Response{status: 200} = resp} ->
+        %{resp: resp, buffer: "", finish_reason: nil, provider: provider}
 
-  @doc false
-  # Extracts and joins the payload of all `data:` lines in one SSE event.
-  # Returns `:done` for a `[DONE]` sentinel, `nil` when there is no data.
-  @spec event_data(binary()) :: binary() | :done | nil
-  def event_data(event) do
-    data =
-      event
-      |> String.split("\n")
-      |> Enum.filter(&String.starts_with?(&1, "data:"))
-      |> Enum.map_join("", fn line ->
-        line |> String.replace_prefix("data:", "") |> String.trim_leading()
-      end)
+      {:ok, %Req.Response{status: status} = resp} ->
+        body = drain(resp, "")
+        safe_cancel(resp)
+        {:fail, Chunk.error(Error.from_http(status, decode_body(body), provider))}
 
-    case data do
-      "" -> nil
-      "[DONE]" -> :done
-      json -> json
+      {:error, reason} ->
+        {:fail, Chunk.error(Error.from_transport(reason, provider))}
     end
   end
 
-  defp start(req, req_opts) do
-    resp = Req.post!(req, [into: :self] ++ req_opts)
+  # A failure discovered before any data arrived still emits one terminal chunk.
+  defp next({:fail, chunk}, _mapper), do: {[chunk], :halted}
+  defp next(:halted, _mapper), do: {:halt, :halted}
 
-    if resp.status == 200 do
-      %{resp: resp, buffer: "", done: false}
-    else
-      body = drain(resp, "")
-      safe_cancel(resp)
-      raise StreamError, status: resp.status, body: body
-    end
-  end
-
-  defp next(%{done: true} = state, _parser), do: {:halt, state}
-
-  defp next(%{resp: resp, buffer: buffer} = state, parser) do
+  defp next(%{resp: resp, buffer: buffer} = state, mapper) do
     receive do
       message ->
         case Req.parse_message(resp, message) do
-          {:ok, chunks} ->
-            {data, done?} = reduce_chunks(chunks)
-            {events, rest} = take_events(buffer <> data)
-            {texts, sse_done?} = parse_events(events, parser)
-            state = %{state | buffer: rest, done: done? or sse_done?}
+          {:ok, messages} ->
+            {data, transport_done?} = reduce_messages(messages)
+            {frames, rest} = SSE.decode(buffer <> data)
+            {mapped, sse_done?} = map_frames(frames, mapper)
+
+            state = %{state | buffer: rest, finish_reason: last_finish(mapped, state)}
+
+            # A mapper turns a finish-reason frame into its own `:done`, but the
+            # single terminal chunk is this module's to emit — the reason has
+            # already been captured above. Keeping both would end every real
+            # stream with two `:done` chunks.
+            chunks = Enum.reject(mapped, &(&1.type == :done))
 
             cond do
-              texts != [] -> {texts, state}
-              state.done -> {:halt, state}
-              true -> next(state, parser)
+              transport_done? or sse_done? -> {chunks ++ [terminal(state)], :halted}
+              chunks != [] -> {chunks, state}
+              true -> next(state, mapper)
             end
 
           {:error, reason} ->
-            raise StreamError, status: nil, body: reason
+            {[Chunk.error(Error.from_transport(reason, state.provider))], :halted}
 
           :unknown ->
-            next(state, parser)
+            next(state, mapper)
         end
     after
-      :timer.minutes(5) -> {:halt, state}
+      @idle_timeout ->
+        error = Error.new(:timeout, "stream idle for 5 minutes with no data", state.provider)
+        {[Chunk.error(error)], :halted}
     end
   end
 
-  defp parse_events(events, parser) do
-    Enum.reduce(events, {[], false}, fn event, {texts, done?} ->
-      case event_data(event) do
-        :done ->
-          {texts, true}
+  @spec terminal(map()) :: Chunk.t()
+  defp terminal(%{finish_reason: reason}), do: Chunk.done(reason || :stop)
 
-        nil ->
-          {texts, done?}
-
-        json ->
-          case Jason.decode(json) do
-            {:ok, decoded} ->
-              case parser.(decoded) do
-                text when is_binary(text) and text != "" -> {texts ++ [text], done?}
-                _ -> {texts, done?}
-              end
-
-            {:error, _} ->
-              {texts, done?}
-          end
-      end
+  # Remember a finish reason seen mid-stream so the terminal chunk can carry it.
+  @spec last_finish([Chunk.t()], map()) :: Chunk.finish_reason()
+  defp last_finish(chunks, state) do
+    Enum.reduce(chunks, state.finish_reason, fn
+      %Chunk{finish_reason: reason}, _acc when not is_nil(reason) -> reason
+      _chunk, acc -> acc
     end)
   end
 
-  defp reduce_chunks(chunks) do
-    Enum.reduce(chunks, {"", false}, fn
+  @spec map_frames([SSE.frame()], mapper()) :: {[Chunk.t()], boolean()}
+  defp map_frames(frames, mapper) do
+    Enum.reduce(frames, {[], false}, fn
+      :done, {chunks, _done?} ->
+        {chunks, true}
+
+      frame, {chunks, done?} ->
+        mapped = frame |> mapper.() |> Enum.reject(&is_nil/1)
+        {chunks ++ mapped, done?}
+    end)
+  end
+
+  @spec reduce_messages([term()]) :: {binary(), boolean()}
+  defp reduce_messages(messages) do
+    Enum.reduce(messages, {"", false}, fn
       {:data, data}, {acc, done?} -> {acc <> data, done?}
       :done, {acc, _done?} -> {acc, true}
       _other, acc -> acc
     end)
   end
 
+  @spec decode_body(binary()) :: term()
+  defp decode_body(body) do
+    case Jason.decode(body) do
+      {:ok, decoded} -> decoded
+      {:error, _reason} -> body
+    end
+  end
+
   defp drain(resp, acc) do
     receive do
       message ->
         case Req.parse_message(resp, message) do
-          {:ok, chunks} ->
-            {data, done?} = reduce_chunks(chunks)
+          {:ok, messages} ->
+            {data, done?} = reduce_messages(messages)
             acc = acc <> data
             if done?, do: acc, else: drain(resp, acc)
 
-          _ ->
+          _other ->
             acc
         end
     after

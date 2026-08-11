@@ -54,7 +54,7 @@ defmodule ExAgent.Patterns.Subagents do
     provider = %{provider | tools: spec[:tools] || []}
 
     case Provider.chat(provider, [user_msg], []) do
-      {:ok, %Message{content: content}} ->
+      {:ok, %ExAgent.Response{content: content}} ->
         {:ok, content}
 
       {:error, reason} ->

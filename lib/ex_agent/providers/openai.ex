@@ -21,6 +21,8 @@ defmodule ExAgent.Providers.OpenAI do
           max_tokens: integer() | nil,
           system_prompt: String.t() | nil,
           tools: [ExAgent.Tool.t()],
+          modalities: [ExAgent.Source.modality()],
+          upload_cache: boolean(),
           req: Req.Request.t() | nil
         }
 
@@ -33,7 +35,9 @@ defmodule ExAgent.Providers.OpenAI do
     base_url: "https://api.openai.com/v1",
     temperature: 0.6,
     max_tokens: 512,
-    tools: []
+    tools: [],
+    modalities: [:text, :image, :document],
+    upload_cache: true
   ]
 
   @schema [
@@ -43,7 +47,17 @@ defmodule ExAgent.Providers.OpenAI do
     temperature: [type: {:or, [:float, nil]}, default: 0.6],
     max_tokens: [type: {:or, [:pos_integer, nil]}, default: 512],
     system_prompt: [type: {:or, [:string, nil]}, default: nil, doc: "System prompt"],
-    tools: [type: {:list, :any}, default: [], doc: "Available tools"]
+    tools: [type: {:list, :any}, default: [], doc: "Available tools"],
+    modalities: [
+      type: {:list, :atom},
+      default: [:text, :image, :document],
+      doc: "Attachment modalities the chosen model accepts"
+    ],
+    upload_cache: [
+      type: :boolean,
+      default: true,
+      doc: "Reuse previous uploads of identical bytes via `ExAgent.UploadCache`"
+    ]
   ]
 
   @doc """
@@ -56,6 +70,9 @@ defmodule ExAgent.Providers.OpenAI do
   - `:base_url` - API base URL (default: `"https://api.openai.com/v1"`)
   - `:system_prompt` - System prompt to prepend to messages
   - `:tools` - List of `ExAgent.Tool` structs
+  - `:modalities` - Attachment modalities the chosen model accepts
+    (default: `[:text, :image, :document]`). Narrow it for a text-only model such
+    as `o1-mini` so an attachment is rejected up front instead of 400ing at the API.
   """
   @spec new(keyword()) :: t()
   def new(opts) do
@@ -85,5 +102,13 @@ defmodule ExAgent.Providers.OpenAI do
   @impl true
   def stream(provider, messages, opts \\ []) do
     ExAgent.Services.OpenAIService.stream(provider, messages, opts)
+  end
+
+  @impl true
+  def supported_modalities(%__MODULE__{modalities: modalities}), do: modalities
+
+  @impl true
+  def embed(provider, inputs, opts \\ []) do
+    ExAgent.Services.OpenAIEmbedService.embed(provider, inputs, opts)
   end
 end

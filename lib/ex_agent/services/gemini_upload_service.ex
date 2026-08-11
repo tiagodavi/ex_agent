@@ -7,12 +7,16 @@ defmodule ExAgent.Services.GeminiUploadService do
   Files uploaded to Gemini expire after 48 hours.
   """
 
+  alias ExAgent.Error
   alias ExAgent.FileRef
+  alias ExAgent.Providers.Gemini
 
   @upload_base_url "https://generativelanguage.googleapis.com/upload/v1beta/files"
 
-  @max_poll_attempts 10
-  @poll_interval_ms 1_000
+  # Large files and video sit in PROCESSING for a while; referencing them early
+  # fails. ~2 minutes of polling by default.
+  @max_poll_attempts 60
+  @poll_interval_ms 2_000
 
   @doc """
   Uploads a file to Gemini and returns a file reference.
@@ -24,9 +28,11 @@ defmodule ExAgent.Services.GeminiUploadService do
 
   - `:filename` - display name for the file (default: `"upload"`)
   - `:upload_url` - override upload URL (useful for testing)
+  - `:poll_interval_ms` - delay between processing polls (default: `2_000`)
+  - `:max_poll_attempts` - polls before giving up (default: `60`, i.e. ~2 minutes)
   """
   @spec upload(String.t(), binary(), String.t(), keyword()) ::
-          {:ok, FileRef.t()} | {:error, term()}
+          {:ok, FileRef.t()} | {:error, Error.t()}
   def upload(api_key, file_data, mime_type, opts \\ []) do
     filename = Keyword.get(opts, :filename, "upload")
     upload_url = Keyword.get(opts, :upload_url, @upload_base_url)
@@ -42,16 +48,18 @@ defmodule ExAgent.Services.GeminiUploadService do
 
     req = Keyword.get(opts, :req, Req.new())
 
-    case Req.post(req, url: upload_url, headers: headers, body: body) do
-      {:ok, %Req.Response{status: 200, body: %{"file" => file_info}}} ->
+    Req.post(req, url: upload_url, headers: headers, body: body)
+    |> Error.from_result(Gemini)
+    |> case do
+      {:ok, %{"file" => file_info}} ->
         ref = build_file_ref(file_info, mime_type, filename)
         maybe_wait_for_active(ref, api_key, file_info, opts)
 
-      {:ok, %Req.Response{status: status, body: resp_body}} ->
-        {:error, {status, resp_body}}
+      {:ok, resp_body} ->
+        {:error, Error.unexpected_response(resp_body, Gemini)}
 
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _error} = failure ->
+        failure
     end
   end
 
@@ -69,7 +77,7 @@ defmodule ExAgent.Services.GeminiUploadService do
   end
 
   @spec maybe_wait_for_active(FileRef.t(), String.t(), map(), keyword()) ::
-          {:ok, FileRef.t()} | {:error, term()}
+          {:ok, FileRef.t()} | {:error, Error.t()}
   defp maybe_wait_for_active(ref, _api_key, %{"state" => "ACTIVE"}, _opts), do: {:ok, ref}
 
   defp maybe_wait_for_active(ref, api_key, %{"state" => "PROCESSING", "name" => name}, opts) do
@@ -79,38 +87,44 @@ defmodule ExAgent.Services.GeminiUploadService do
   defp maybe_wait_for_active(ref, _api_key, _file_info, _opts), do: {:ok, ref}
 
   @spec poll_until_active(FileRef.t(), String.t(), String.t(), non_neg_integer(), keyword()) ::
-          {:ok, FileRef.t()} | {:error, term()}
-  defp poll_until_active(_ref, _api_key, _name, attempt, _opts)
-       when attempt >= @max_poll_attempts do
-    {:error, :file_processing_timeout}
+          {:ok, FileRef.t()} | {:error, Error.t()}
+  defp poll_until_active(ref, api_key, name, attempt, opts) do
+    max_attempts = Keyword.get(opts, :max_poll_attempts, @max_poll_attempts)
+
+    if attempt >= max_attempts do
+      {:error,
+       Error.new(:timeout, "file did not reach ACTIVE after #{max_attempts} polls", Gemini)}
+    else
+      Process.sleep(Keyword.get(opts, :poll_interval_ms, @poll_interval_ms))
+      poll_once(ref, api_key, name, attempt, opts)
+    end
   end
 
-  defp poll_until_active(ref, api_key, name, attempt, opts) do
-    Process.sleep(@poll_interval_ms)
-
+  @spec poll_once(FileRef.t(), String.t(), String.t(), non_neg_integer(), keyword()) ::
+          {:ok, FileRef.t()} | {:error, Error.t()}
+  defp poll_once(ref, api_key, name, attempt, opts) do
     base_url =
       Keyword.get(opts, :poll_base_url, "https://generativelanguage.googleapis.com/v1beta")
 
     req = Keyword.get(opts, :req, Req.new())
 
-    case Req.get(req,
-           url: "#{base_url}/#{name}",
-           headers: [{"x-goog-api-key", api_key}]
-         ) do
-      {:ok, %Req.Response{status: 200, body: %{"state" => "ACTIVE"} = file_info}} ->
+    Req.get(req, url: "#{base_url}/#{name}", headers: [{"x-goog-api-key", api_key}])
+    |> Error.from_result(Gemini)
+    |> case do
+      {:ok, %{"state" => "ACTIVE"} = file_info} ->
         {:ok, build_file_ref(file_info, ref.mime_type, ref.filename)}
 
-      {:ok, %Req.Response{status: 200, body: %{"state" => "PROCESSING"}}} ->
+      {:ok, %{"state" => "PROCESSING"}} ->
         poll_until_active(ref, api_key, name, attempt + 1, opts)
 
-      {:ok, %Req.Response{status: 200, body: %{"state" => "FAILED"}}} ->
-        {:error, :file_processing_failed}
+      {:ok, %{"state" => "FAILED"}} ->
+        {:error, Error.new(:server, "file processing failed", Gemini)}
 
-      {:ok, %Req.Response{status: status, body: body}} ->
-        {:error, {status, body}}
+      {:ok, body} ->
+        {:error, Error.unexpected_response(body, Gemini)}
 
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _error} = failure ->
+        failure
     end
   end
 

@@ -8,7 +8,7 @@ defmodule ExAgent.Providers.GeminiTest do
     test "creates a provider with required api_key" do
       provider = Gemini.new(api_key: "AIza-test-key")
       assert provider.api_key == "AIza-test-key"
-      assert provider.model == "gemini-2.0-flash"
+      assert provider.model == "gemini-3.6-flash"
       assert %Req.Request{} = provider.req
     end
 
@@ -119,7 +119,7 @@ defmodule ExAgent.Providers.GeminiTest do
         req: req
       }
 
-      assert {:error, {403, _}} =
+      assert {:error, %ExAgent.Error{type: :auth, status: 403}} =
                ExAgent.Provider.upload(provider, "data", "text/plain",
                  req: req,
                  upload_url: "http://localhost/upload/v1beta/files"
