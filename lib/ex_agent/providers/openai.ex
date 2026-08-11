@@ -13,6 +13,11 @@ defmodule ExAgent.Providers.OpenAI do
 
   @behaviour ExAgent.Provider
 
+  # The key is also baked into `:req`'s headers, so both are redacted: a struct
+  # in a crash report, a Logger metadata dump, or an `IO.inspect` while
+  # debugging must not print the credential.
+  @derive {Inspect, except: [:api_key, :req]}
+
   @type t :: %__MODULE__{
           api_key: String.t(),
           model: String.t(),
@@ -33,8 +38,8 @@ defmodule ExAgent.Providers.OpenAI do
     :req,
     model: "gpt-4o",
     base_url: "https://api.openai.com/v1",
-    temperature: 0.6,
-    max_tokens: 512,
+    temperature: nil,
+    max_tokens: nil,
     tools: [],
     modalities: [:text, :image, :document],
     upload_cache: true
@@ -44,8 +49,18 @@ defmodule ExAgent.Providers.OpenAI do
     api_key: [type: :string, required: true, doc: "OpenAI API key"],
     model: [type: :string, default: "gpt-4o", doc: "Model name"],
     base_url: [type: :string, default: "https://api.openai.com/v1", doc: "API base URL"],
-    temperature: [type: {:or, [:float, nil]}, default: 0.6],
-    max_tokens: [type: {:or, [:pos_integer, nil]}, default: 512],
+    temperature: [
+      type: {:or, [:float, :integer, nil]},
+      default: nil,
+      doc:
+        "Sampling temperature; omitted from the request when nil, so the model's own default applies"
+    ],
+    max_tokens: [
+      type: {:or, [:pos_integer, nil]},
+      default: nil,
+      doc:
+        "Output token ceiling; omitted when nil rather than truncating at a library-invented default"
+    ],
     system_prompt: [type: {:or, [:string, nil]}, default: nil, doc: "System prompt"],
     tools: [type: {:list, :any}, default: [], doc: "Available tools"],
     modalities: [

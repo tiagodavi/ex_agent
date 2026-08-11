@@ -615,29 +615,46 @@ defmodule ExAgent.AgentTest do
       assert ["ok"] = pid |> Agent.chat_stream("second") |> stream_texts()
     end
 
-    test "resolves tool calls first, then streams the final turn" do
+    # Every turn is streamed, including the tool-call turn. The previous shape
+    # ran the whole loop non-streamed and then regenerated the answer as a
+    # stream, paying for two completions per streamed turn.
+    test "streams each turn, running tools between them, without a second billing" do
       call_count = :counters.new(1, [:atomics])
+
+      tool_call_frame = %{
+        "choices" => [
+          %{
+            "delta" => %{
+              "tool_calls" => [
+                %{
+                  "index" => 0,
+                  "id" => "call_1",
+                  "function" => %{"name" => "search", "arguments" => ~s({"query":"elixir"})}
+                }
+              ]
+            },
+            "finish_reason" => "tool_calls"
+          }
+        ]
+      }
 
       provider =
         build_provider(fn conn ->
           :counters.add(call_count, 1, 1)
-          count = :counters.get(call_count, 1)
+          {:ok, body, conn} = Plug.Conn.read_body(conn)
+          parsed = Jason.decode!(body)
 
-          cond do
-            # First (non-streamed) call: model asks for a tool.
-            count == 1 ->
-              Req.Test.json(conn, tool_call_response("search", %{"query" => "elixir"}))
+          # Every request must be a streaming one.
+          assert parsed["stream"] == true
 
-            # Second (non-streamed) call detects the final turn (text).
-            count == 2 ->
-              Req.Test.json(conn, success_response("final"))
+          frames =
+            if Enum.any?(parsed["messages"], &(&1["role"] == "tool")),
+              do: [delta("Found "), delta("elixir")],
+              else: [tool_call_frame]
 
-            # Third call is the streamed final turn.
-            true ->
-              conn
-              |> Plug.Conn.put_resp_content_type("text/event-stream")
-              |> Plug.Conn.send_resp(200, sse([delta("Found "), delta("elixir")]))
-          end
+          conn
+          |> Plug.Conn.put_resp_content_type("text/event-stream")
+          |> Plug.Conn.send_resp(200, sse(frames))
         end)
 
       {:ok, tool} =
@@ -650,13 +667,25 @@ defmodule ExAgent.AgentTest do
 
       {:ok, pid} = Agent.start_link(provider: provider, tools: [tool])
 
+      chunks = pid |> Agent.chat_stream("Search elixir") |> Enum.to_list()
+
       assert ["Found ", "elixir"] =
-               pid |> Agent.chat_stream("Search elixir") |> stream_texts()
+               chunks |> Enum.filter(&(&1.type == :text_delta)) |> Enum.map(& &1.text)
+
+      # One completion per turn, not two.
+      assert :counters.get(call_count, 1) == 2
+
+      # The invariant holds across a multi-turn stream: the tool turn's `:done`
+      # is swallowed so the consumer still sees exactly one.
+      assert Enum.count(chunks, &(&1.type == :done)) == 1
 
       # user, assistant-tool-call, tool-result, streamed assistant
       context = Agent.get_context(pid)
       assert length(context.messages) == 4
       assert %Message{role: :assistant, content: "Found elixir"} = List.last(context.messages)
+
+      assert %Message{role: :tool, tool_call_id: "call_1", content: "Results for elixir"} =
+               Enum.at(context.messages, 2)
     end
 
     test "yields an error chunk instead of raising when the agent is busy" do

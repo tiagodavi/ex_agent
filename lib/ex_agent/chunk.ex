@@ -128,7 +128,14 @@ defmodule ExAgent.Chunk do
       |> Enum.map(&(&1.arguments || ""))
       |> IO.iodata_to_binary()
 
-    %{"name" => name, "args" => decode_arguments(arguments)}
+    call = %{"name" => name, "args" => decode_arguments(arguments)}
+
+    # Only when the provider issued one, so a call correlates back by id where
+    # that matters and the shape stays minimal where it does not.
+    case Enum.find_value(fragments, & &1.id) do
+      nil -> call
+      id -> Map.put(call, "id", id)
+    end
   end
 
   @spec decode_arguments(String.t()) :: map()

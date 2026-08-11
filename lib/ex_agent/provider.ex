@@ -58,11 +58,20 @@ defmodule ExAgent.Provider do
   @doc """
   Sends a list of messages to the LLM and returns the assistant's response.
 
-  Returns `{:ok, %ExAgent.Response{}}` for a regular response, `{:tool_call, name, args}`
-  when the LLM wants to invoke a tool, or `{:error, %ExAgent.Error{}}` on failure.
+  Returns `{:ok, %ExAgent.Response{}}` for a regular response, `{:tool_calls, calls}`
+  when the LLM wants to invoke tools, or `{:error, %ExAgent.Error{}}` on failure.
+
+  Each call is a map with `"name"`, `"args"`, and — where the provider issues
+  one — `"id"`. Models request several tools in a single turn, so this is a
+  list; returning only the first left the model believing tools had run that
+  never did.
+
+  `{:tool_call, name, args}` remains accepted for a single call, so providers
+  written against the older contract keep working.
   """
   @callback chat(provider :: struct(), [ExAgent.Message.t()], keyword()) ::
               {:ok, ExAgent.Response.t()}
+              | {:tool_calls, [map()]}
               | {:tool_call, String.t(), map()}
               | {:error, ExAgent.Error.t()}
 
@@ -128,11 +137,21 @@ defmodule ExAgent.Provider do
   """
   @spec chat(struct(), [ExAgent.Message.t()], keyword()) ::
           {:ok, ExAgent.Response.t()}
+          | {:tool_calls, [map()]}
           | {:tool_call, String.t(), map()}
           | {:error, ExAgent.Error.t()}
   def chat(provider, messages, opts \\ []) do
     with :ok <- check_modalities(provider, messages) do
-      provider.__struct__.chat(provider, messages, opts)
+      ExAgent.Telemetry.span(
+        [:chat],
+        %{
+          provider: provider.__struct__,
+          model: Map.get(provider, :model),
+          message_count: length(messages),
+          streaming?: false
+        },
+        fn -> provider.__struct__.chat(provider, messages, opts) end
+      )
     end
   end
 
@@ -194,7 +213,11 @@ defmodule ExAgent.Provider do
     mod = provider.__struct__
 
     if function_exported?(mod, :embed, 3) do
-      mod.embed(provider, inputs, opts)
+      ExAgent.Telemetry.span(
+        [:embed],
+        %{provider: mod, input_count: length(inputs)},
+        fn -> mod.embed(provider, inputs, opts) end
+      )
     else
       {:error,
        ExAgent.Error.new(:unsupported, "#{inspect(mod)} does not support embeddings", mod)}

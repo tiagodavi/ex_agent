@@ -42,10 +42,10 @@ defmodule ExAgent.Services.Streaming do
   defp start(req, req_opts, provider) do
     case Req.post(req, [into: :self] ++ req_opts) do
       {:ok, %Req.Response{status: 200} = resp} ->
-        %{resp: resp, buffer: "", finish_reason: nil, provider: provider}
+        %{resp: resp, ref: async_ref(resp), buffer: "", finish_reason: nil, provider: provider}
 
       {:ok, %Req.Response{status: status} = resp} ->
-        body = drain(resp, "")
+        body = drain(resp, async_ref(resp), "")
         safe_cancel(resp)
         {:fail, Chunk.error(Error.from_http(status, decode_body(body), provider))}
 
@@ -58,39 +58,49 @@ defmodule ExAgent.Services.Streaming do
   defp next({:fail, chunk}, _mapper), do: {[chunk], :halted}
   defp next(:halted, _mapper), do: {:halt, :halted}
 
-  defp next(%{resp: resp, buffer: buffer} = state, mapper) do
+  # Selective receive on this response's ref. A bare `receive message ->` would
+  # match *anything* in the mailbox, and `Req.parse_message/2` answering
+  # `:unknown` discards it — so streaming inside a LiveView or GenServer would
+  # silently eat that process's own messages. Both shapes are matched because an
+  # adapter may tag its messages before the ref.
+  defp next(%{ref: ref} = state, mapper) do
     receive do
-      message ->
-        case Req.parse_message(resp, message) do
-          {:ok, messages} ->
-            {data, transport_done?} = reduce_messages(messages)
-            {frames, rest} = SSE.decode(buffer <> data)
-            {mapped, sse_done?} = map_frames(frames, mapper)
-
-            state = %{state | buffer: rest, finish_reason: last_finish(mapped, state)}
-
-            # A mapper turns a finish-reason frame into its own `:done`, but the
-            # single terminal chunk is this module's to emit — the reason has
-            # already been captured above. Keeping both would end every real
-            # stream with two `:done` chunks.
-            chunks = Enum.reject(mapped, &(&1.type == :done))
-
-            cond do
-              transport_done? or sse_done? -> {chunks ++ [terminal(state)], :halted}
-              chunks != [] -> {chunks, state}
-              true -> next(state, mapper)
-            end
-
-          {:error, reason} ->
-            {[Chunk.error(Error.from_transport(reason, state.provider))], :halted}
-
-          :unknown ->
-            next(state, mapper)
-        end
+      {^ref, _payload} = message -> consume(message, state, mapper)
+      {_tag, ^ref, _payload} = message -> consume(message, state, mapper)
     after
       @idle_timeout ->
         error = Error.new(:timeout, "stream idle for 5 minutes with no data", state.provider)
         {[Chunk.error(error)], :halted}
+    end
+  end
+
+  @spec consume(term(), map(), mapper()) :: {[Chunk.t()], map() | :halted}
+  defp consume(message, %{resp: resp, buffer: buffer} = state, mapper) do
+    case Req.parse_message(resp, message) do
+      {:ok, messages} ->
+        {data, transport_done?} = reduce_messages(messages)
+        {frames, rest} = SSE.decode(buffer <> data)
+        {mapped, sse_done?} = map_frames(frames, mapper)
+
+        state = %{state | buffer: rest, finish_reason: last_finish(mapped, state)}
+
+        # A mapper turns a finish-reason frame into its own `:done`, but the
+        # single terminal chunk is this module's to emit — the reason has
+        # already been captured above. Keeping both would end every real
+        # stream with two `:done` chunks.
+        chunks = Enum.reject(mapped, &(&1.type == :done))
+
+        cond do
+          transport_done? or sse_done? -> {chunks ++ [terminal(state)], :halted}
+          chunks != [] -> {chunks, state}
+          true -> next(state, mapper)
+        end
+
+      {:error, reason} ->
+        {[Chunk.error(Error.from_transport(reason, state.provider))], :halted}
+
+      :unknown ->
+        next(state, mapper)
     end
   end
 
@@ -135,22 +145,35 @@ defmodule ExAgent.Services.Streaming do
     end
   end
 
-  defp drain(resp, acc) do
+  # Reads an error response's body off the mailbox, selectively as above.
+  @spec drain(Req.Response.t(), reference() | nil, binary()) :: binary()
+  defp drain(resp, ref, acc) do
     receive do
-      message ->
-        case Req.parse_message(resp, message) do
-          {:ok, messages} ->
-            {data, done?} = reduce_messages(messages)
-            acc = acc <> data
-            if done?, do: acc, else: drain(resp, acc)
-
-          _other ->
-            acc
-        end
+      {^ref, _payload} = message -> drain_message(message, resp, ref, acc)
+      {_tag, ^ref, _payload} = message -> drain_message(message, resp, ref, acc)
     after
       5_000 -> acc
     end
   end
+
+  @spec drain_message(term(), Req.Response.t(), reference() | nil, binary()) :: binary()
+  defp drain_message(message, resp, ref, acc) do
+    case Req.parse_message(resp, message) do
+      {:ok, messages} ->
+        {data, done?} = reduce_messages(messages)
+        acc = acc <> data
+        if done?, do: acc, else: drain(resp, ref, acc)
+
+      _other ->
+        acc
+    end
+  end
+
+  # `into: :self` always yields an async body; anything else means there are no
+  # messages to wait for, and `nil` simply matches nothing.
+  @spec async_ref(Req.Response.t()) :: reference() | nil
+  defp async_ref(%Req.Response{body: %Req.Response.Async{ref: ref}}), do: ref
+  defp async_ref(_resp), do: nil
 
   defp stop(%{resp: resp}), do: safe_cancel(resp)
   defp stop(_state), do: :ok

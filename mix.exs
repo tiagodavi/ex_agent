@@ -49,7 +49,8 @@ defmodule ExAgent.MixProject do
           ExAgent.Context,
           ExAgent.Tool,
           ExAgent.Skill,
-          ExAgent.Error
+          ExAgent.Error,
+          ExAgent.Telemetry
         ],
         Files: [
           ExAgent.Attachment,
@@ -113,6 +114,7 @@ defmodule ExAgent.MixProject do
   defp deps do
     [
       {:req, "~> 0.5"},
+      {:telemetry, "~> 1.0"},
       {:jason, "~> 1.4"},
       {:mime, "~> 2.0"},
       {:nimble_options, "~> 1.1"},

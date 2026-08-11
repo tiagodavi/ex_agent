@@ -13,12 +13,15 @@ defmodule ExAgent.Providers.Gemini do
 
   @behaviour ExAgent.Provider
 
+  # See `ExAgent.Providers.OpenAI` — the credential must not reach a crash dump.
+  @derive {Inspect, except: [:api_key, :req]}
+
   @type t :: %__MODULE__{
           api_key: String.t(),
           model: String.t(),
           base_url: String.t(),
-          temperature: float(),
-          max_tokens: integer(),
+          temperature: float() | nil,
+          max_tokens: pos_integer() | nil,
           system_prompt: String.t() | nil,
           tools: [ExAgent.Tool.t()],
           modalities: [ExAgent.Source.modality()],
@@ -33,8 +36,8 @@ defmodule ExAgent.Providers.Gemini do
     :req,
     model: "gemini-3.6-flash",
     base_url: "https://generativelanguage.googleapis.com/v1beta",
-    temperature: 0.6,
-    max_tokens: 512,
+    temperature: nil,
+    max_tokens: nil,
     tools: [],
     modalities: [:text, :image, :document, :video, :audio],
     upload_cache: true
@@ -48,8 +51,16 @@ defmodule ExAgent.Providers.Gemini do
       default: "https://generativelanguage.googleapis.com/v1beta",
       doc: "API base URL"
     ],
-    temperature: [type: :float, default: 0.6],
-    max_tokens: [type: :pos_integer, default: 512],
+    temperature: [
+      type: {:or, [:float, :integer, nil]},
+      default: nil,
+      doc: "Sampling temperature; omitted from the request when nil"
+    ],
+    max_tokens: [
+      type: {:or, [:pos_integer, nil]},
+      default: nil,
+      doc: "Sent as `maxOutputTokens`; omitted when nil"
+    ],
     system_prompt: [type: {:or, [:string, nil]}, default: nil, doc: "System prompt"],
     tools: [type: {:list, :any}, default: [], doc: "Available tools"],
     modalities: [

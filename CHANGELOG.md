@@ -1,5 +1,110 @@
 ## v0.3.0 (unreleased)
 
+### Fixed
+
+An end-to-end audit of the library found the following. Every one of them shipped with a
+green suite: the tests covered the shape of each code path but not the behaviour a user
+would observe. `test/ex_agent/regressions_test.exs` now covers each one.
+
+- **Streaming stole messages from the caller's mailbox.** `chat_stream/3` runs in the
+  *calling* process, and the SSE transport used a bare `receive` that matched anything;
+  `Req.parse_message/2` answering `:unknown` then discarded it. Streaming inside a
+  LiveView or GenServer silently ate that process's own messages, and the matching
+  `handle_info` simply never fired. The receive is now selective on the response ref.
+
+- **Gemini ignored `:max_tokens` entirely.** The option was merged under one key and read
+  under another, so neither the provider setting nor a per-call override ever reached
+  `generationConfig` and every response used the API default. Google's own
+  `:max_output_tokens` spelling is accepted as an alias.
+
+- **A Gemini reasoning part was returned as the answer.** Only the first content part was
+  read, and a `thought` part matched the text clause — so the model's scratchpad became
+  `:content` and the real answer was discarded. Text split across parts was truncated to
+  the first piece for the same reason. Reasoning now lands in `:thinking`, as it already
+  did when streaming.
+
+- **Parallel tool calls were silently dropped.** Both dialects returned only the first
+  call, so the model believed tools had run that never did. `c:ExAgent.Provider.chat/3`
+  now answers `{:tool_calls, calls}` with every call; `{:tool_call, name, args}` is still
+  accepted from providers written against the older contract.
+
+- **Tool call ids were fabricated.** The assistant message was rebuilt with `id = name`,
+  discarding the id the API issued — so calling one tool twice in a turn produced two
+  colliding ids. The provider's id is now carried through, and a tool result correlates
+  back by it (Gemini correlates by function name, which travels alongside).
+
+- **A tool returning anything but a string crashed the turn.** `to_string/1` on a map
+  raised `Protocol.UndefinedError`, killing the task and surfacing as an opaque `:server`
+  error — for the most natural tool shape there is. Non-string results are now JSON
+  encoded.
+
+- **A skill never deactivated.** Applying one overwrote the provider's `system_prompt`
+  permanently, so the first activation repainted the agent for the rest of its life — a
+  "SQL expert" answering jokes. Skills are re-evaluated every turn and now restore the
+  agent's own prompt when they stop matching.
+
+- **One failing agent took down a whole Router run.** Only `{:exit, :timeout}` was
+  handled, so any other crash raised a `CaseClauseError` in the caller, discarding the
+  routes that had already answered. Both `Router` and `Subagents` now report a failure
+  per route, named. A handoff result no longer falls through unmatched.
+
+- **`parse_response/2` raised on a message with no `"content"` key.** A bare refusal gave
+  a `CaseClauseError` instead of a normalized `{:error, %ExAgent.Error{}}`.
+
+- **OpenAI could never reference an uploaded image.** Attachments over the inline ceiling
+  were uploaded and then referenced as an `image_file` content part — which is the
+  Assistants API's shape and which chat completions rejects outright. Verified against
+  the live API: no file-id shape works for images there. Oversized images and image
+  `file_refs` now return `{:error, %ExAgent.Error{type: :unsupported}}` with the fix in
+  the message, instead of spending an upload on a request that would always fail.
+
+- **API keys were printed by `inspect/1`.** No provider redacted its credential, so every
+  crash report, `dbg`, and Logger metadata dump leaked it. All three providers now derive
+  `Inspect` excluding `:api_key`, `:req`, and (for `OpenAICompatible`) `:headers`, where
+  gateway credentials live.
+
+- **Streaming with tools billed twice.** The tool loop ran non-streamed to completion and
+  then *discarded the finished answer* to regenerate it as a stream — two full completions
+  per streamed turn. Every turn is now streamed once, with tools run between turns; the
+  consumer still sees exactly one terminal `:done` chunk.
+
+- **SSE multi-line `data:` fields were concatenated without a separator.** The spec joins
+  them with a newline. JSON payloads survived either way; a plain-text stream did not.
+
+- Skills, subagents, and the streaming tool loop assumed every provider struct carries
+  `:tools` and `:system_prompt`, reintroducing the `KeyError` already fixed on the chat
+  path. All of them now populate a field only when the provider declares it.
+
+- `ExAgent.Agent.chat/3`'s `@spec` still promised `{:ok, Message.t()}` after the switch to
+  `ExAgent.Response`.
+
+### Changed
+
+- **`:max_tokens` and `:temperature` now default to `nil`** on every provider and are
+  omitted from the request, so the model's own defaults apply. The previous
+  `max_tokens: 512` truncated most real answers at `finish_reason: :length`, and
+  `temperature: 0.6` broke models that reject the parameter outright (o-series,
+  search-preview). **Set them explicitly if you relied on the old values.** Both now also
+  accept an integer, where `temperature: 1` used to raise.
+
+- OpenAI embeddings reject a batch over 2048 inputs up front, naming the limit, rather
+  than letting the API 400.
+
+### Added
+
+- **`ExAgent.Telemetry`.** `[:ex_agent, :chat | :embed | :tool, :start | :stop | :exception]`
+  events carrying duration, token counts, model, and — on failure — `:error_type` and
+  `:retryable?`. A library that calls billed APIs has to be measurable; nothing is logged
+  on your behalf. Adds a `:telemetry` dependency.
+
+- **`:max_history` on `start_agent/1`** and `ExAgent.Context.trim/2`. History was
+  unbounded, so every turn resent the whole transcript until the model returned
+  `:context_length`. Opt-in, because silently forgetting what a user said is the caller's
+  decision. Leading system messages survive the window, and a tool result is never
+  orphaned from the assistant message that requested it.
+
+- **`:max_tool_iterations` on `start_agent/1`**, replacing the hard-coded ceiling of 10.
+
 ### Added
 
 - **Provider roles.** `config :ex_agent, :roles, chat: {Module, opts}` maps a purpose to

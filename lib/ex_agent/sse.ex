@@ -84,8 +84,11 @@ defmodule ExAgent.SSE do
       event
       |> String.split(@line_separator)
       |> Enum.filter(&String.starts_with?(&1, "data:"))
-      |> Enum.map_join("", fn line ->
-        line |> String.replace_prefix("data:", "") |> String.trim_leading()
+      # The spec joins consecutive `data:` lines with a newline and strips a
+      # single leading space, not all whitespace — a JSON payload survives
+      # either way, but a plain-text stream does not.
+      |> Enum.map_join("\n", fn line ->
+        line |> String.replace_prefix("data:", "") |> String.replace_prefix(" ", "")
       end)
 
     case data do

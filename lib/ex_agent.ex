@@ -55,6 +55,11 @@ defmodule ExAgent do
   carrying a `:retryable?` flag, so retry logic is written once rather than per
   provider.
 
+  ## Observability
+
+  Every provider call emits `:telemetry` events — latency, token counts, and the
+  normalized error type. See `ExAgent.Telemetry`.
+
   ## Multi-agent patterns
 
   - `ExAgent.Patterns.Subagents` — centralized orchestration, isolated contexts
@@ -112,7 +117,7 @@ defmodule ExAgent do
 
   Stateless: no agent process, no conversation history, no tool loop. If the
   role's provider carries `tools:`, a tool request comes back as the raw
-  `{:tool_call, name, args}` from `c:ExAgent.Provider.chat/3` — **tools are not
+  `{:tool_calls, calls}` from `c:ExAgent.Provider.chat/3` — **tools are not
   executed**. Use `start_agent(role: role, tools: [...])` when you want the loop.
 
   Accepts the same `:files` option as `chat/3`.
@@ -122,7 +127,7 @@ defmodule ExAgent do
   """
   @spec chat_with(atom(), String.t(), keyword()) ::
           {:ok, ExAgent.Response.t()}
-          | {:tool_call, String.t(), map()}
+          | {:tool_calls, [map()]}
           | {:error, ExAgent.Error.t()}
   def chat_with(role, input, opts \\ []) when is_atom(role) and is_binary(input) do
     with {:ok, message} <- user_message(input, opts) do

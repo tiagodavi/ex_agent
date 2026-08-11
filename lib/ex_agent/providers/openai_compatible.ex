@@ -80,7 +80,9 @@ defmodule ExAgent.Providers.OpenAICompatible do
 
   @behaviour ExAgent.Provider
 
-  require Logger
+  # See `ExAgent.Providers.OpenAI`. `:headers` is redacted too — this is where
+  # Modal keys and other gateway credentials live.
+  @derive {Inspect, except: [:api_key, :headers, :req]}
 
   alias ExAgent.Error
 
@@ -108,8 +110,8 @@ defmodule ExAgent.Providers.OpenAICompatible do
     headers: [],
     modalities: [:text],
     max_inline_bytes: 33_554_432,
-    temperature: 0.6,
-    max_tokens: 512,
+    temperature: nil,
+    max_tokens: nil,
     tools: []
   ]
 
@@ -136,8 +138,16 @@ defmodule ExAgent.Providers.OpenAICompatible do
       default: 33_554_432,
       doc: "Largest attachment sent as a data URI; there is no upload fallback"
     ],
-    temperature: [type: {:or, [:float, nil]}, default: 0.6],
-    max_tokens: [type: {:or, [:pos_integer, nil]}, default: 512],
+    temperature: [
+      type: {:or, [:float, :integer, nil]},
+      default: nil,
+      doc: "Sampling temperature; omitted from the request when nil"
+    ],
+    max_tokens: [
+      type: {:or, [:pos_integer, nil]},
+      default: nil,
+      doc: "Output token ceiling; omitted when nil"
+    ],
     system_prompt: [type: {:or, [:string, nil]}, default: nil, doc: "System prompt"],
     tools: [type: {:list, :any}, default: [], doc: "Available tools"]
   ]

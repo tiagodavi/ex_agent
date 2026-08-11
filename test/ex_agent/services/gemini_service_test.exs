@@ -77,7 +77,7 @@ defmodule ExAgent.Services.GeminiServiceTest do
 
       {:ok, msg} = Message.new(role: :user, content: "Search")
 
-      assert {:tool_call, "search", %{"q" => "elixir"}} =
+      assert {:tool_calls, [%{"name" => "search", "args" => %{"q" => "elixir"}}]} =
                GeminiService.chat(provider, [msg])
     end
   end

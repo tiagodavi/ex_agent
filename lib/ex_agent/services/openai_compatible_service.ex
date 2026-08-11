@@ -14,8 +14,8 @@ defmodule ExAgent.Services.OpenAICompatibleService do
   alias ExAgent.{Attachment, Error, Message, Source}
 
   @chat_opts_schema [
-    temperature: [type: {:or, [:float, nil]}, default: 0.6],
-    max_tokens: [type: {:or, [:pos_integer, nil]}, default: 512],
+    temperature: [type: {:or, [:float, :integer, nil]}],
+    max_tokens: [type: {:or, [:pos_integer, nil]}],
     tool_choice: [type: {:or, [:string, :map]}, default: "auto"]
   ]
 
@@ -23,7 +23,9 @@ defmodule ExAgent.Services.OpenAICompatibleService do
   Sends a chat completion request to an OpenAI-compatible endpoint.
   """
   @spec chat(OpenAICompatible.t(), [Message.t()], keyword()) ::
-          {:ok, Response.t()} | {:tool_call, String.t(), map()} | {:error, Error.t()}
+          {:ok, Response.t()}
+          | {:tool_calls, [map()]}
+          | {:error, Error.t()}
   def chat(%OpenAICompatible{} = provider, messages, opts \\ []) do
     with {:ok, messages} <- prepare_attachments(provider, messages) do
       opts = prepare_opts(provider, opts)

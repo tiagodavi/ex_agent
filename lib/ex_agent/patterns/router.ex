@@ -75,15 +75,21 @@ defmodule ExAgent.Patterns.Router do
       fn %{name: name, agent: agent} ->
         case Agent.chat(agent, input) do
           {:ok, %ExAgent.Response{content: content}} -> {name, content}
+          {:handoff, target, _context} -> {name, "Handed off to #{inspect(target)}"}
           {:error, reason} -> {name, "Error: #{inspect(reason)}"}
         end
       end,
       timeout: timeout,
-      on_timeout: :kill_task
+      on_timeout: :kill_task,
+      # Without this an exit carries no route name, and one crashed agent used
+      # to raise a CaseClauseError in the caller — taking down the routes that
+      # had already answered.
+      zip_input_on_exit: true
     )
     |> Enum.map(fn
       {:ok, result} -> result
-      {:exit, :timeout} -> {"unknown", "Error: timeout"}
+      {:exit, {%{name: name}, :timeout}} -> {name, "Error: timeout"}
+      {:exit, {%{name: name}, reason}} -> {name, "Error: #{inspect(reason)}"}
     end)
   end
 

@@ -16,8 +16,11 @@ defmodule ExAgent.Services.GeminiService do
   @max_inline_pdf_bytes 50_000_000
 
   @chat_opts_schema [
-    temperature: [type: :float, default: 0.7],
-    max_output_tokens: [type: :pos_integer],
+    temperature: [type: {:or, [:float, :integer, nil]}],
+    max_tokens: [type: {:or, [:pos_integer, nil]}],
+    # Gemini's own spelling, accepted as an alias so a caller reading Google's
+    # docs is not silently ignored.
+    max_output_tokens: [type: {:or, [:pos_integer, nil]}],
     built_in_tools: [type: {:list, :atom}, default: []]
   ]
 
@@ -35,7 +38,9 @@ defmodule ExAgent.Services.GeminiService do
           [Message.t()],
           keyword()
         ) ::
-          {:ok, Response.t()} | {:tool_call, String.t(), map()} | {:error, Error.t()}
+          {:ok, Response.t()}
+          | {:tool_calls, [map()]}
+          | {:error, Error.t()}
   def chat(%Gemini{} = provider, messages, opts \\ []) do
     with {:ok, messages} <- prepare_attachments(provider, messages, opts) do
       opts = prepare_opts(provider, opts)
@@ -167,13 +172,15 @@ defmodule ExAgent.Services.GeminiService do
 
   @spec prepare_opts(Gemini.t(), keyword()) :: keyword()
   defp prepare_opts(provider, opts) do
-    max_tokens = opts[:max_tokens] || provider.max_tokens
-    temperature = opts[:temperature] || provider.temperature
+    validated =
+      opts
+      |> Keyword.take(Keyword.keys(@chat_opts_schema))
+      |> NimbleOptions.validate!(@chat_opts_schema)
 
-    opts
-    |> Keyword.take(Keyword.keys(@chat_opts_schema))
-    |> NimbleOptions.validate!(@chat_opts_schema)
-    |> Keyword.merge(temperature: temperature, max_tokens: max_tokens)
+    max_tokens = validated[:max_output_tokens] || validated[:max_tokens] || provider.max_tokens
+    temperature = validated[:temperature] || provider.temperature
+
+    Keyword.merge(validated, temperature: temperature, max_output_tokens: max_tokens)
   end
 
   # Gemini's streaming envelope has changed between API generations, so match the
@@ -183,35 +190,40 @@ defmodule ExAgent.Services.GeminiService do
   defp chunks(%{"candidates" => [candidate | _]} = frame) do
     parts = get_in(candidate, ["content", "parts"]) || []
 
-    Enum.flat_map(parts, &part_chunks/1) ++
-      usage_chunks(frame) ++
-      finish_chunks(candidate)
+    parts
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {part, index} -> part_chunks(part, index) end)
+    |> Kernel.++(usage_chunks(frame))
+    |> Kernel.++(finish_chunks(candidate))
   end
 
   defp chunks(%{"usageMetadata" => _} = frame), do: usage_chunks(frame)
   defp chunks(frame), do: fallback_text(frame)
 
-  @spec part_chunks(map()) :: [Chunk.t()]
-  defp part_chunks(%{"text" => text, "thought" => true}) when is_binary(text),
+  @spec part_chunks(map(), non_neg_integer()) :: [Chunk.t()]
+  defp part_chunks(%{"text" => text, "thought" => true}, _index) when is_binary(text),
     do: [Chunk.thinking_delta(text)]
 
-  defp part_chunks(%{"text" => text}) when is_binary(text) and text != "",
+  defp part_chunks(%{"text" => text}, _index) when is_binary(text) and text != "",
     do: [Chunk.text_delta(text)]
 
   # Gemini sends a function call whole rather than fragmented; emitting it as a
   # single complete "fragment" keeps the accumulate-by-index contract intact.
-  defp part_chunks(%{"functionCall" => %{"name" => name} = call}) do
+  # The part's position is the index, so parallel calls stay distinct instead of
+  # being reassembled into one.
+  defp part_chunks(%{"functionCall" => %{"name" => name} = call}, index) do
     [
       %Chunk{
         type: :tool_call_delta,
-        index: 0,
+        index: index,
+        id: name,
         name: name,
         arguments: Jason.encode!(Map.get(call, "args") || %{})
       }
     ]
   end
 
-  defp part_chunks(_part), do: []
+  defp part_chunks(_part, _index), do: []
 
   @spec usage_chunks(map()) :: [Chunk.t()]
   defp usage_chunks(%{"usageMetadata" => usage}) when is_map(usage) do
@@ -279,16 +291,15 @@ defmodule ExAgent.Services.GeminiService do
     %{"role" => "model", "parts" => [%{"text" => content}]}
   end
 
-  defp format_content(%Message{role: :tool, content: content, tool_call_id: tool_call_id}) do
+  # Gemini correlates a response by function *name*, not by call id, so prefer
+  # the name recorded on the message when the two differ.
+  defp format_content(%Message{role: :tool} = message) do
+    name = message.metadata[:tool_name] || message.tool_call_id || "unknown"
+
     %{
       "role" => "user",
       "parts" => [
-        %{
-          "functionResponse" => %{
-            "name" => tool_call_id || "unknown",
-            "response" => %{"result" => content}
-          }
-        }
+        %{"functionResponse" => %{"name" => name, "response" => %{"result" => message.content}}}
       ]
     }
   end
@@ -375,27 +386,64 @@ defmodule ExAgent.Services.GeminiService do
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   @spec parse_response(map()) ::
-          {:ok, Response.t()} | {:tool_call, String.t(), map()} | {:error, Error.t()}
+          {:ok, Response.t()}
+          | {:tool_calls, [map()]}
+          | {:error, Error.t()}
+  # Gemini splits a turn across parts: reasoning parts are flagged `thought`,
+  # answer text can arrive in several pieces, and a turn may request several
+  # tools at once. Reading only the first part returned the reasoning trace as
+  # the answer and silently dropped every parallel tool call.
   defp parse_response(%{"candidates" => [candidate | _]} = body) do
     parts = get_in(candidate, ["content", "parts"]) || []
 
-    case parts do
-      [%{"functionCall" => %{"name" => name, "args" => args}} | _] ->
-        {:tool_call, name, args}
-
-      [%{"text" => text} | _] ->
-        {:ok,
-         Response.new(%Message{role: :assistant, content: text},
-           usage: gemini_usage(body["usageMetadata"]),
-           finish_reason: Chunk.finish_reason(candidate["finishReason"])
-         )}
-
-      _ ->
-        {:error, Error.unexpected_response(parts, Gemini)}
+    case tool_calls(parts) do
+      [] -> text_response(parts, candidate, body)
+      calls -> {:tool_calls, calls}
     end
   end
 
   defp parse_response(body), do: {:error, Error.unexpected_response(body, Gemini)}
+
+  @spec tool_calls([map()]) :: [map()]
+  defp tool_calls(parts) do
+    for %{"functionCall" => %{"name" => name} = call} <- parts do
+      # Gemini has no per-call id; a functionResponse is correlated by name, so
+      # the name serves as the id here.
+      %{"id" => name, "name" => name, "args" => Map.get(call, "args") || %{}}
+    end
+  end
+
+  @spec text_response([map()], map(), map()) :: {:ok, Response.t()} | {:error, Error.t()}
+  defp text_response(parts, candidate, body) do
+    {thinking, text} = split_text(parts)
+
+    if text == nil and thinking == nil do
+      {:error, Error.unexpected_response(parts, Gemini)}
+    else
+      {:ok,
+       Response.new(%Message{role: :assistant, content: text || ""},
+         thinking: thinking,
+         usage: gemini_usage(body["usageMetadata"]),
+         finish_reason: Chunk.finish_reason(candidate["finishReason"])
+       )}
+    end
+  end
+
+  # Reasoning is kept out of `:content` — it is not conversation history, and
+  # replaying it corrupts the next turn.
+  @spec split_text([map()]) :: {String.t() | nil, String.t() | nil}
+  defp split_text(parts) do
+    {thoughts, answers} =
+      parts
+      |> Enum.filter(&match?(%{"text" => text} when is_binary(text), &1))
+      |> Enum.split_with(&(Map.get(&1, "thought") == true))
+
+    {join_text(thoughts), join_text(answers)}
+  end
+
+  @spec join_text([map()]) :: String.t() | nil
+  defp join_text([]), do: nil
+  defp join_text(parts), do: Enum.map_join(parts, "", & &1["text"])
 
   @spec gemini_usage(term()) :: map()
   defp gemini_usage(%{} = usage) do

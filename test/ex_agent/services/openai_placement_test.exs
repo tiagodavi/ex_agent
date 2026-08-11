@@ -130,16 +130,18 @@ defmodule ExAgent.Services.OpenAIPlacementTest do
   end
 
   describe "over the limit, attachments upload" do
-    test "given an image over the limit, then it uploads and references the file id" do
+    # Chat completions has no content part that references an uploaded image, so
+    # uploading one would spend the round trip and then guarantee a 400.
+    test "given an image over the limit, then it is refused instead of uploaded" do
       provider = recording_provider(file_id: "file-large-image")
       attachment = sized_attachment("image/png", @inline_limit + 1)
 
-      assert {:ok, _} = OpenAIService.chat(provider, [message_with([attachment])])
+      assert {:error, %ExAgent.Error{type: :unsupported} = error} =
+               OpenAIService.chat(provider, [message_with([attachment])])
 
-      assert upload_count() == 1
-
-      assert %{"type" => "image_file", "image_file" => %{"file_id" => "file-large-image"}} =
-               first_part()
+      assert error.message =~ "over OpenAI's"
+      assert upload_count() == 0
+      refute_received {:chat, _}
     end
 
     test "given a document over the limit, then it uploads and references the file id" do
@@ -167,7 +169,7 @@ defmodule ExAgent.Services.OpenAIPlacementTest do
           )
       }
 
-      attachment = sized_attachment("image/png", @inline_limit + 1)
+      attachment = sized_attachment("application/pdf", @inline_limit + 1)
 
       assert {:error, %ExAgent.Error{status: 413} = error} =
                OpenAIService.chat(provider, [message_with([attachment])])
@@ -201,7 +203,7 @@ defmodule ExAgent.Services.OpenAIPlacementTest do
   describe "upload reuse" do
     test "given the same bytes twice, then only one upload is issued" do
       provider = recording_provider()
-      attachment = sized_attachment("image/png", @inline_limit + 1, "identical bytes")
+      attachment = sized_attachment("application/pdf", @inline_limit + 1, "identical bytes")
 
       assert {:ok, _} = OpenAIService.chat(provider, [message_with([attachment])])
       assert {:ok, _} = OpenAIService.chat(provider, [message_with([attachment])])
@@ -211,7 +213,7 @@ defmodule ExAgent.Services.OpenAIPlacementTest do
 
     test "given upload_cache: false, then every call re-uploads" do
       provider = recording_provider(upload_cache: false)
-      attachment = sized_attachment("image/png", @inline_limit + 1, "identical bytes")
+      attachment = sized_attachment("application/pdf", @inline_limit + 1, "identical bytes")
 
       assert {:ok, _} = OpenAIService.chat(provider, [message_with([attachment])])
       assert {:ok, _} = OpenAIService.chat(provider, [message_with([attachment])])
@@ -220,7 +222,7 @@ defmodule ExAgent.Services.OpenAIPlacementTest do
     end
 
     test "given the same bytes under a different api key, then it re-uploads" do
-      attachment = sized_attachment("image/png", @inline_limit + 1, "shared bytes")
+      attachment = sized_attachment("application/pdf", @inline_limit + 1, "shared bytes")
 
       assert {:ok, _} =
                OpenAIService.chat(recording_provider(), [message_with([attachment])])
