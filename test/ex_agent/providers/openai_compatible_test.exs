@@ -211,6 +211,64 @@ defmodule ExAgent.Providers.OpenAICompatibleTest do
     end
   end
 
+  # A gateway can serve a document-reading model (OpenRouter fronting Claude, a
+  # Modal container running a doc VLM), so :document is declarable like any other
+  # modality — and must then be shaped as the dialect's `file` part, not squeezed
+  # into `image_url`.
+  describe "documents" do
+    test "given inline document bytes, then they become a file part with base64 data" do
+      provider = recording_provider(modalities: [:text, :document])
+      pdf = "%PDF-1.4 tiny"
+
+      assert {:ok, _} =
+               Provider.chat(provider, [
+                 message_with([%{data: pdf, mime_type: "application/pdf", filename: "r.pdf"}])
+               ])
+
+      part = first_part(sent().body)
+
+      assert part["type"] == "file"
+      assert part["file"]["filename"] == "r.pdf"
+      assert part["file"]["file_data"] == "data:application/pdf;base64,#{Base.encode64(pdf)}"
+    end
+
+    test "given a document URL, then it is referenced rather than fetched" do
+      provider = recording_provider(modalities: [:text, :document])
+
+      assert {:ok, _} =
+               Provider.chat(provider, [
+                 message_with([%{url: "https://cdn.example.com/report.pdf"}])
+               ])
+
+      part = first_part(sent().body)
+
+      assert part["type"] == "file"
+      assert part["file"]["file_url"] == "https://cdn.example.com/report.pdf"
+    end
+
+    test "given an unnamed document, then a filename is still supplied" do
+      # The dialect requires `filename` alongside `file_data`; omitting it makes
+      # gateways reject the part.
+      provider = recording_provider(modalities: [:text, :document])
+
+      assert {:ok, _} =
+               Provider.chat(provider, [message_with([%{data: "text", mime_type: "text/plain"}])])
+
+      assert first_part(sent().body)["file"]["filename"] == "upload"
+    end
+
+    test "given a document, then it is never shaped as an image part" do
+      provider = recording_provider(modalities: [:text, :document])
+
+      assert {:ok, _} =
+               Provider.chat(provider, [
+                 message_with([%{data: "%PDF", mime_type: "application/pdf"}])
+               ])
+
+      refute first_part(sent().body)["type"] == "image_url"
+    end
+  end
+
   describe "max_inline_bytes" do
     test "given an attachment over the limit, then it returns a clear unsupported error" do
       provider = recording_provider(max_inline_bytes: 1_000)

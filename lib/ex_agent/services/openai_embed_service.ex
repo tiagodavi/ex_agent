@@ -12,6 +12,11 @@ defmodule ExAgent.Services.OpenAIEmbedService do
 
   @default_model "text-embedding-3-small"
 
+  # OpenAI rejects a request with more than 2048 inputs. Chunking is silent
+  # magic; a clear error naming the limit is not, and the caller knows how they
+  # want to batch.
+  @max_inputs 2048
+
   @doc """
   Generates embeddings for `inputs`.
 
@@ -28,6 +33,7 @@ defmodule ExAgent.Services.OpenAIEmbedService do
     dimensions = opts[:dimensions]
 
     with :ok <- reject_task(opts[:task]),
+         :ok <- check_batch_size(inputs),
          {:ok, texts} <- to_texts(inputs) do
       body =
         %{"model" => model, "input" => texts}
@@ -40,6 +46,23 @@ defmodule ExAgent.Services.OpenAIEmbedService do
         {:ok, response} -> build_result(response, model, dimensions)
         {:error, _error} = failure -> failure
       end
+    end
+  end
+
+  @spec check_batch_size([Embeddings.input()]) :: :ok | {:error, Error.t()}
+  defp check_batch_size(inputs) do
+    count = length(inputs)
+
+    if count > @max_inputs do
+      {:error,
+       Error.new(
+         :invalid_request,
+         "OpenAI accepts at most #{@max_inputs} inputs per embeddings request, got #{count}; " <>
+           "split them with Enum.chunk_every/2",
+         OpenAI
+       )}
+    else
+      :ok
     end
   end
 

@@ -54,6 +54,43 @@ defmodule ExAgent.Context do
   end
 
   @doc """
+  Drops the oldest messages, keeping at most `max` of them.
+
+  Conversation history otherwise grows without bound: every turn resends the
+  whole transcript, so cost climbs turn over turn until the model returns
+  `:context_length` and the agent is stuck. Trimming is opt-in — silently
+  forgetting what a user said is a decision the caller has to make.
+
+  Leading `:system` messages are always kept: they carry instructions that must
+  outlive the window. A `:tool` result is never left without the `:assistant`
+  message that requested it, since providers reject an orphaned result.
+
+  ## Examples
+
+      iex> {:ok, a} = ExAgent.Message.new(role: :user, content: "one")
+      iex> {:ok, b} = ExAgent.Message.new(role: :user, content: "two")
+      iex> ctx = ExAgent.Context.new(messages: [a, b])
+      iex> ExAgent.Context.trim(ctx, 1).messages |> Enum.map(& &1.content)
+      ["two"]
+  """
+  @spec trim(t(), pos_integer()) :: t()
+  def trim(%__MODULE__{messages: messages} = context, max) when is_integer(max) and max > 0 do
+    {system, rest} = Enum.split_while(messages, &(&1.role == :system))
+
+    kept =
+      rest
+      |> Enum.take(-max)
+      |> drop_orphaned_results()
+
+    %{context | messages: system ++ kept}
+  end
+
+  # A `:tool` message at the head lost the assistant turn that called it.
+  @spec drop_orphaned_results([Message.t()]) :: [Message.t()]
+  defp drop_orphaned_results([%Message{role: :tool} | rest]), do: drop_orphaned_results(rest)
+  defp drop_orphaned_results(messages), do: messages
+
+  @doc """
   Returns the last assistant message from the context, or nil if none exists.
 
   ## Examples

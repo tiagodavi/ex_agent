@@ -14,8 +14,8 @@ defmodule ExAgent.Services.OpenAIService do
   @max_inline_bytes 20_000_000
 
   @chat_opts_schema [
-    temperature: [type: {:or, [:float, nil]}, default: 0.6],
-    max_tokens: [type: {:or, [:pos_integer, nil]}, default: 512],
+    temperature: [type: {:or, [:float, :integer, nil]}],
+    max_tokens: [type: {:or, [:pos_integer, nil]}],
     tool_choice: [type: {:or, [:string, :map]}, default: "auto"],
     built_in_tools: [type: {:list, {:or, [:atom, :map]}}, default: []]
   ]
@@ -28,7 +28,9 @@ defmodule ExAgent.Services.OpenAIService do
           [Message.t()],
           keyword()
         ) ::
-          {:ok, Response.t()} | {:tool_call, String.t(), map()} | {:error, Error.t()}
+          {:ok, Response.t()}
+          | {:tool_calls, [map()]}
+          | {:error, Error.t()}
   def chat(%OpenAI{} = provider, messages, opts \\ []) do
     with {:ok, messages} <- prepare_attachments(provider, messages) do
       do_chat(provider, messages, opts)
@@ -36,7 +38,9 @@ defmodule ExAgent.Services.OpenAIService do
   end
 
   @spec do_chat(OpenAI.t(), [Message.t()], keyword()) ::
-          {:ok, Response.t()} | {:tool_call, String.t(), map()} | {:error, Error.t()}
+          {:ok, Response.t()}
+          | {:tool_calls, [map()]}
+          | {:error, Error.t()}
   defp do_chat(provider, messages, opts) do
     opts = prepare_opts(provider, opts)
     body = build_chat_body(provider, messages, opts)
@@ -96,8 +100,35 @@ defmodule ExAgent.Services.OpenAIService do
     do: Message.map_attachments(messages, &place(provider, &1))
 
   @spec place(OpenAI.t(), Attachment.t()) :: {:ok, Attachment.t()} | {:error, Error.t()}
-  defp place(_provider, %Attachment{kind: kind} = attachment) when kind in [:url, :file_ref],
-    do: {:ok, attachment}
+  defp place(_provider, %Attachment{kind: :url} = attachment), do: {:ok, attachment}
+
+  # Chat completions has no way to reference an uploaded *image*: `image_file`
+  # is the Assistants API's shape, `image_url` demands a real URL, and the `file`
+  # part only accepts PDFs. Verified against the live API — every variant 400s.
+  defp place(_provider, %Attachment{kind: :file_ref, modality: :image}) do
+    {:error,
+     Error.new(
+       :unsupported,
+       "OpenAI chat completions cannot reference an uploaded image; pass the image " <>
+         "as %{path: ...}, %{data: ...}, or a public %{url: ...} instead",
+       OpenAI
+     )}
+  end
+
+  defp place(_provider, %Attachment{kind: :file_ref} = attachment), do: {:ok, attachment}
+
+  # For the same reason an oversized image is refused rather than uploaded: the
+  # upload would succeed and the chat request that follows would always fail.
+  defp place(_provider, %Attachment{modality: :image, byte_size: size} = attachment)
+       when is_integer(size) and size > @max_inline_bytes do
+    {:error,
+     Error.new(
+       :unsupported,
+       "#{attachment.filename || "image"} is #{size} bytes, over OpenAI's " <>
+         "#{@max_inline_bytes}-byte inline limit for images; resize it or host it at a URL",
+       OpenAI
+     )}
+  end
 
   defp place(_provider, %Attachment{byte_size: size} = attachment)
        when is_nil(size) or size <= @max_inline_bytes,
@@ -178,13 +209,9 @@ defmodule ExAgent.Services.OpenAIService do
   end
 
   @spec format_attachment(map()) :: map()
-  defp format_attachment(%{file_ref: %FileRef{provider: :openai, file_id: fid, mime_type: mt}}) do
-    if String.starts_with?(mt, "image/") do
-      %{"type" => "image_file", "image_file" => %{"file_id" => fid}}
-    else
-      %{"type" => "file", "file" => %{"file_id" => fid}}
-    end
-  end
+  # Images never reach here — `place/2` refuses an uploaded image up front.
+  defp format_attachment(%{file_ref: %FileRef{provider: :openai, file_id: fid}}),
+    do: %{"type" => "file", "file" => %{"file_id" => fid}}
 
   defp format_attachment(%{kind: :url, url: url, mime_type: mime_type} = att) do
     if String.starts_with?(mime_type, "image/") do
@@ -216,6 +243,8 @@ defmodule ExAgent.Services.OpenAIService do
   end
 
   @spec parse_response(map()) ::
-          {:ok, Response.t()} | {:tool_call, String.t(), map()} | {:error, Error.t()}
+          {:ok, Response.t()}
+          | {:tool_calls, [map()]}
+          | {:error, Error.t()}
   defp parse_response(body), do: OpenAIDialect.parse_response(body, OpenAI)
 end

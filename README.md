@@ -3,7 +3,7 @@
 Build multi-agent LLM applications in Elixir. One behaviour abstracts OpenAI, Gemini, and
 any OpenAI-compatible endpoint; OTP primitives orchestrate them.
 
-[Hex](https://hex.pm/packages/ex_agent) · [HexDocs](https://hexdocs.pm/ex_agent)
+[Hex](https://hex.pm/packages/ex_agent) · [HexDocs](https://hexdocs.pm/ex_agent) · [![CI](https://github.com/tiagodavi/ex_agent/actions/workflows/ci.yml/badge.svg)](https://github.com/tiagodavi/ex_agent/actions/workflows/ci.yml)
 
 - **Swap providers without touching application code** — one behaviour, struct-based config
 - **Config-driven roles** — name a purpose (`:vision`, `:embed`), not a vendor
@@ -44,6 +44,7 @@ response.content   #=> "Elixir is a functional programming language..."
 | [Attachments](#attachments) · [Uploads](#uploads) | Send files |
 | [Embeddings](#embeddings) | RAG |
 | [Patterns](#multi-agent-patterns) | Subagents, Skills, Handoffs, Router |
+| [Observability](#observability) | Telemetry events |
 | [Recipes](#recipes) | Retry, RAG, multi-tenant, LiveView, testing |
 | [Custom providers](#custom-providers) · [Architecture](#architecture) · [Testing](#testing) | Extend |
 
@@ -59,8 +60,8 @@ ExAgent.Providers.OpenAI.new(
   api_key: "sk-...",                  # required
   model: "gpt-4o",                    # default
   system_prompt: "You are concise.",
-  temperature: 0.6,
-  max_tokens: 512
+  temperature: 0.6,               # omitted from the request when unset
+  max_tokens: 4096                # omitted when unset, so the model's own ceiling applies
 )
 
 ExAgent.Providers.Gemini.new(
@@ -105,8 +106,8 @@ end
 
 There is **no Files API** here: bytes always become `data:` URIs, and anything past
 `:max_inline_bytes` returns `{:error, %ExAgent.Error{type: :unsupported}}` telling you to
-host it at a URL the container can reach. Documents are unsupported — extract the text or
-rasterize the pages first.
+host it at a URL the container can reach — never truncated, never retried. A
+`%{file_ref: ref}` from another provider is rejected for the same reason.
 
 ### Modalities are per model, not per vendor
 
@@ -123,13 +124,30 @@ ExAgent.chat(agent, "Describe this", files: [%{path: "photo.jpg"}])
 
 | Modality | OpenAI | Gemini | OpenAICompatible |
 |---|---|---|---|
+| `:text` | ✅ | ✅ | ✅ |
 | `:image` | ✅ | ✅ | declare it |
-| `:document` | ✅ | ✅ | ❌ |
+| `:document` | ✅ | ✅ | declare it |
 | `:video` | ❌ | ✅ | declare it |
 | `:audio` | ❌ | ✅ | declare it |
 
-Those are *defaults*. ExAgent keeps no model-to-modality table on purpose — it would go
-stale silently, and whoever picked the model already knows.
+`:text` is always present — it is what a plain message is. The rest are *defaults* you can
+narrow or widen. ExAgent keeps no model-to-modality table on purpose: it would go stale
+silently, and whoever picked the model already knows.
+
+"Declare it" means `OpenAICompatible` ships `[:text]` and you list what your deployment
+actually serves — including `:document`, for a gateway fronting a document-reading model:
+
+```elixir
+ExAgent.Providers.OpenAICompatible.new(
+  base_url: "https://openrouter.ai/api/v1",
+  model: "anthropic/claude-sonnet-4.5",
+  api_key: key,
+  modalities: [:text, :image, :document]
+)
+```
+
+Nothing here is validated against the endpoint until a request is made, so declare only
+what the served model actually reads.
 
 ## Roles
 
@@ -173,7 +191,7 @@ ExAgent.stream_with(:chat, "Explain OTP") |> Enum.each(&IO.write(&1.text || ""))
 ```
 
 **These do not run the tool loop** — it lives in the agent. A tool-configured provider
-returns the raw `{:tool_call, name, args}`. Use `start_agent(role: ..., tools: [...])`
+returns the raw `{:tool_calls, calls}`. Use `start_agent(role: ..., tools: [...])`
 when you want tools resolved.
 
 Roles resolve **once at boot** into `:persistent_term`, so lookups cost nothing per
@@ -221,6 +239,104 @@ ExAgent.stop_agent(agent)
 
 One turn at a time: while a request is in flight, `chat/3` returns `{:error, :busy}`.
 
+### Multi-turn conversations
+
+An agent **is** the conversation. Every turn is appended to its context and the whole
+history is resent on the next request — you never assemble a message list yourself.
+
+```elixir
+{:ok, agent} = ExAgent.start_agent(provider: provider)
+
+{:ok, _} = ExAgent.chat(agent, "My name is Ada.")
+{:ok, r} = ExAgent.chat(agent, "What is my name?")
+r.content   #=> "Your name is Ada."
+
+Enum.map(ExAgent.get_context(agent).messages, & &1.role)
+#=> [:user, :assistant, :user, :assistant]
+
+ExAgent.reset(agent)   # forget everything; the system prompt still applies
+```
+
+Attachments are part of that history too, so a follow-up turn can refer back to a file
+sent earlier without resending it.
+
+History is **unbounded by default** — every turn resends the whole transcript, so cost
+climbs turn over turn until the model returns `:context_length`. Cap it when a
+conversation is long-lived:
+
+```elixir
+{:ok, agent} = ExAgent.start_agent(provider: provider, max_history: 20)
+```
+
+Leading system messages always survive the window, and a tool result is never left
+without the assistant message that requested it. Trimming is opt-in because silently
+forgetting what a user said is your decision, not the library's.
+
+### System prompts and instructions
+
+The system prompt lives on the **provider struct**, not in the context. It is prepended to
+every request and is never stored as a message, so `reset/1` cannot lose it and it cannot
+be pushed out of the window by history.
+
+```elixir
+provider = ExAgent.Providers.OpenAI.new(
+  api_key: key,
+  system_prompt: "You are a terse assistant. Answer in one sentence."
+)
+
+{:ok, agent} = ExAgent.start_agent(provider: provider)
+```
+
+Three ways to vary instructions, in increasing order of dynamism:
+
+```elixir
+# 1. Fixed for this agent — set it on the provider, as above.
+
+# 2. Per conversation — build a provider per agent
+{:ok, pirate} = ExAgent.start_agent(provider: %{provider | system_prompt: "Talk like a pirate."})
+
+# 3. Conditional on the conversation — a Skill swaps in a prompt (and tools)
+#    when its activation_fn matches. See "Skills" below.
+{:ok, agent} = ExAgent.start_agent(provider: provider, skills: [sql_skill])
+```
+
+To steer a single turn without changing the agent, put the instruction in the message —
+it becomes part of the history like any other user turn:
+
+```elixir
+ExAgent.chat(agent, "Reply as JSON only.\n\nList three Elixir books.")
+```
+
+### Seeding or restoring history
+
+Rehydrate a conversation from your database — build a `Context` and hand it to a fresh
+agent. This is the same mechanism the Handoff pattern uses.
+
+```elixir
+context =
+  Enum.reduce(rows_from_db, ExAgent.Context.new(), fn row, ctx ->
+    {:ok, msg} = ExAgent.Message.new(role: row.role, content: row.content)
+    ExAgent.Context.add_message(ctx, msg)
+  end)
+
+{:ok, agent} = ExAgent.start_agent(provider: provider)
+:ok = ExAgent.handoff(agent, context)          # replaces the agent's context
+
+{:ok, r} = ExAgent.chat(agent, "What did we decide?")
+```
+
+Persisting works the other way round — `get_context/1` after each turn:
+
+```elixir
+for %ExAgent.Message{role: role, content: content} <- ExAgent.get_context(agent).messages do
+  Repo.insert!(%Turn{conversation_id: id, role: to_string(role), content: content})
+end
+```
+
+`ExAgent.Context.get_last_assistant_message/1` pulls just the latest reply, and
+`ExAgent.Context.new(metadata: %{...})` carries your own bookkeeping alongside the
+messages.
+
 ### Response
 
 `chat/3` and `collect/1` both return the same struct, so streaming and non-streaming share
@@ -230,7 +346,7 @@ one downstream path.
 response.content        #=> "Elixir is a functional language..."
 response.usage          #=> %{input_tokens: 8, output_tokens: 96, total_tokens: 104}
 response.finish_reason  #=> :stop | :length | :tool_calls | :content_filter | :error
-response.tool_calls     #=> nil, or [%{"name" => ..., "args" => %{}}]
+response.tool_calls     #=> nil, or [%{"id" => ..., "name" => ..., "args" => %{}}]
 response.thinking       #=> reasoning trace, when the model emitted one
 response.message        #=> the %ExAgent.Message{} appended to history
 ```
@@ -270,7 +386,7 @@ also an exception, so it can be raised where no return value exists.
 ## Tools
 
 Define a function the LLM can invoke. The agent loops — call, execute, feed the result
-back — until a final answer or 10 iterations.
+back — until a final answer or 10 iterations (`max_tool_iterations:` to change it).
 
 ```elixir
 {:ok, weather_tool} = ExAgent.Tool.new(
@@ -289,7 +405,11 @@ back — until a final answer or 10 iterations.
 ```
 
 A tool returns `{:ok, result}`, `{:error, reason}` (fed back to the LLM as an error), or
-any bare value — which is taken as the result.
+any bare value — which is taken as the result. A result that is not a string is JSON
+encoded, so returning a map or list from an API-backed tool is fine.
+
+A model can request **several tools in one turn**. All of them run, in order, each with
+its own result correlated back by the provider's call id.
 
 ### Built-in provider tools
 
@@ -419,7 +539,15 @@ ExAgent.chat(agent, "Describe this",
 
 **Gemini** inlines to 20 MB (50 MB for PDFs), then uses the Files API and waits for
 `ACTIVE` — large files and video sit in `PROCESSING`, and referencing them early fails.
-**OpenAI** inlines to 20 MB, then uploads and references by `file_id`.
+**OpenAI** inlines to 20 MB, then uploads documents and references them by `file_id`.
+
+> #### OpenAI cannot reference an uploaded image {: .warning}
+>
+> Chat completions has no content part for one: `image_file` is the Assistants API's
+> shape, `image_url` requires a real URL, and the `file` part accepts PDFs only. An image
+> over the inline ceiling, or an image `file_ref`, therefore returns
+> `{:error, %ExAgent.Error{type: :unsupported}}` rather than spending an upload on a
+> request that would always fail. Resize it, or host it and pass `%{url: ...}`.
 
 Uploads are cached by content hash, scoped per provider + base URL + API key, so the same
 file across turns uploads once and two accounts never share a reference. An expired
@@ -532,11 +660,33 @@ than dropping it; OpenAI-compatible endpoints take a `task` body field.
 ```elixir
 ExAgent.embed(provider, [%{content: "body", title: "OTP Guide"}],
   model: "gemini-embedding-2", task: :retrieval_document)
-
-# Jina task strings differ across model versions
-ExAgent.embed(jina, ["query"], task: :retrieval_query,
-  task_map: %{retrieval_query: "retrieval.query"})
 ```
+
+#### When the atom vocabulary does not fit
+
+A self-hosted endpoint serves whatever model you deployed, and those vocabularies change
+between versions — Jina v3 has `"retrieval.passage"`, while v5 replaced it with a
+`"retrieval"` task plus a query/document prompt and added `"text-matching"`. So
+`OpenAICompatible` — and only it — accepts a raw string:
+
+```elixir
+# Keep the portable atom, retarget the strings for your model
+ExAgent.embed(jina, ["query"],
+  task: :retrieval_query,
+  task_map: %{retrieval_query: "retrieval.query", retrieval_document: "retrieval.passage"})
+
+# Or pass the model's own task — sent verbatim, no translation, no validation
+ExAgent.embed(jina, ["a"], task: "text-matching")
+```
+
+**Gemini and OpenAI take atoms only.** Gemini's `taskType` is a closed enum and OpenAI has
+no task field at all, so there a string is a typo far more often than a new value and is
+rejected naming the valid atoms. Model drift there is handled by `:embedding_family`
+instead.
+
+An atom is always validated, so `:retreival_query` is rejected rather than quietly sent.
+Either way the result's `:task` carries back exactly what you passed, so stored provenance
+stays truthful.
 
 ### Models and dimensions
 
@@ -602,6 +752,10 @@ One agent loads specialized prompts and tools based on context, evaluated before
 ExAgent.Agent.load_skill(agent, another_skill)   # add one at runtime
 ```
 
+Skills are re-evaluated before **every** turn, so one that stops matching is undone and
+the agent's own `system_prompt` comes back. A skill activating once does not repaint the
+agent for the rest of its life.
+
 ### Handoffs — state-driven transitions
 
 The caller receives `{:handoff, target, context}` and decides routing, so agents stay
@@ -654,6 +808,29 @@ ExAgent.route("anything", routes: [%{name: "n", agent: a, match_fn: fn _ -> fals
 ```
 
 ---
+
+## Observability
+
+Every provider call emits `:telemetry` events, so latency and token spend are
+measurable without wrapping the library. Nothing is logged on your behalf.
+
+```elixir
+:telemetry.attach_many(
+  "ex-agent",
+  [[:ex_agent, :chat, :stop], [:ex_agent, :embed, :stop], [:ex_agent, :tool, :stop]],
+  &MyApp.Metrics.handle/4,
+  nil
+)
+
+def handle([:ex_agent, :chat, :stop], measurements, metadata, _config) do
+  MyApp.Metrics.histogram("llm.latency", measurements.duration, tags: [metadata.model])
+  MyApp.Metrics.count("llm.tokens", measurements[:total_tokens] || 0)
+end
+```
+
+`:result` is `:ok`, `:tool_calls`, or `:error`; a failure also carries `:error_type` and
+`:retryable?`, which is what a retry-rate dashboard is built on. See `ExAgent.Telemetry`
+for the full event table.
 
 ## Recipes
 
@@ -855,8 +1032,34 @@ provider = MyApp.Providers.Anthropic.new(api_key: "sk-ant-...")
 {:ok, agent} = ExAgent.start_agent(provider: provider)
 ```
 
-`chat/3` returns `{:ok, %ExAgent.Response{}}`, `{:tool_call, name, args}`, or
-`{:error, %ExAgent.Error{}}`.
+`chat/3` returns `{:ok, %ExAgent.Response{}}`, `{:tool_calls, calls}`, or
+`{:error, %ExAgent.Error{}}`. Each call is `%{"name" => name, "args" => args}`, plus
+`"id"` where the provider issues one — models request several tools per turn, so it is a
+list. `{:tool_call, name, args}` is still accepted for a single call.
+
+**Each provider owns its own rules.** The dispatcher stays generic — it reads
+`supported_modalities/1` rather than knowing which vendor accepts video, and the modality
+gate, error classification, and SSE framing are shared because they are genuinely
+provider-independent. Anything vendor-specific lives in that provider's module or service:
+
+| Rule | Where it lives |
+|---|---|
+| Which modalities are accepted | `:modalities` on the provider struct |
+| Inline ceiling and upload behaviour | that provider's service |
+| Embedding task vocabulary | that provider's embed service |
+| Content-part shapes | that provider's `format_attachment/1` |
+
+So a new provider is free to disagree. If yours implements `upload/4`, build its
+references with your own provider atom — `ExAgent.FileRef` requires only that a reference
+carries a `:file_id` or a `:file_uri`:
+
+```elixir
+{:ok, ref} = ExAgent.FileRef.new(
+  provider: :my_llm,
+  file_uri: "https://my-llm.test/files/abc",
+  mime_type: "application/pdf"
+)
+```
 
 ## Architecture
 

@@ -14,6 +14,11 @@ defmodule ExAgent.Agent do
   - `tools` - available tools for function-calling
   - `skills` - loadable skill definitions
   - `active_skill` - currently active skill (if any)
+
+  ## Options beyond the provider
+
+  - `:max_tool_iterations` - ceiling on tool round-trips (default 10)
+  - `:max_history` - keep at most this many messages; unbounded when unset
   """
 
   use GenServer
@@ -27,6 +32,8 @@ defmodule ExAgent.Agent do
           role: atom(),
           tools: [Tool.t()],
           skills: [Skill.t()],
+          max_tool_iterations: pos_integer(),
+          max_history: pos_integer(),
           name: GenServer.name()
         ]
 
@@ -38,12 +45,18 @@ defmodule ExAgent.Agent do
           skills: [Skill.t()],
           active_skill: Skill.t() | nil,
           built_in_tools: [atom()],
+          max_tool_iterations: pos_integer(),
+          max_history: pos_integer() | nil,
+          base_system_prompt: String.t() | nil,
           status: :idle | :processing | :handed_off,
           reply_to: GenServer.from() | nil,
-          task_ref: reference() | nil
+          task_ref: reference() | nil,
+          pre_turn_context: Context.t() | nil
         }
 
-  @max_tool_iterations 10
+  # A ceiling on tool round-trips, so a model that keeps calling tools cannot
+  # bill forever. Overridable per agent with `:max_tool_iterations`.
+  @default_max_tool_iterations 10
 
   # Client API
 
@@ -102,7 +115,7 @@ defmodule ExAgent.Agent do
         built_in_tools: [:google_search])
   """
   @spec chat(GenServer.server(), String.t(), keyword()) ::
-          {:ok, Message.t()}
+          {:ok, ExAgent.Response.t()}
           | {:handoff, pid() | atom(), Context.t()}
           | {:error, term()}
   def chat(agent, user_input, opts \\ []) when is_binary(user_input) do
@@ -124,9 +137,9 @@ defmodule ExAgent.Agent do
   @doc """
   Sends a user message and returns a lazy `Stream` of the assistant's text chunks.
 
-  Tool-call turns (if any tools are configured) are resolved first without
-  streaming; only the final assistant turn is streamed. When no tools are
-  configured the response is streamed directly.
+  Every turn is streamed, including one that requests tools: its tool calls are
+  executed and the next turn opened, so a multi-turn answer costs one completion
+  per turn and still ends with exactly one `:done` chunk.
 
   The conversation context is committed when the stream is fully consumed, so
   **the returned stream must be consumed** (e.g. with `Enum`/`Stream` functions)
@@ -151,18 +164,8 @@ defmodule ExAgent.Agent do
   @spec chat_stream(GenServer.server(), String.t(), keyword()) :: Enumerable.t()
   def chat_stream(agent, user_input, opts \\ []) when is_binary(user_input) do
     case GenServer.call(agent, {:begin_stream, user_input, opts}, :infinity) do
-      {:ok, provider, messages, [], stream_opts} ->
-        committing_stream(agent, provider, messages, stream_opts, [])
-
-      {:ok, provider, messages, _tools, stream_opts} ->
-        case resolve_tools(provider, messages, stream_opts, [], 0) do
-          {:ok, resolved_messages, pending} ->
-            committing_stream(agent, provider, resolved_messages, stream_opts, pending)
-
-          {:error, reason} ->
-            GenServer.cast(agent, {:commit_stream, []})
-            error_stream(:server, "tool resolution failed: #{inspect(reason)}")
-        end
+      {:ok, provider, messages, tools, stream_opts} ->
+        turn_stream(agent, provider, messages, stream_opts, tools)
 
       {:error, :busy} ->
         error_stream(:invalid_request, "agent is processing another request")
@@ -213,9 +216,15 @@ defmodule ExAgent.Agent do
       skills: opts[:skills] || [],
       active_skill: nil,
       built_in_tools: opts[:built_in_tools] || [],
+      max_tool_iterations: opts[:max_tool_iterations] || @default_max_tool_iterations,
+      max_history: opts[:max_history],
+      # Remembered so a skill's prompt can be undone; a skill that activates once
+      # must not overwrite the agent's own persona for the rest of its life.
+      base_system_prompt: Map.get(Keyword.fetch!(opts, :provider), :system_prompt),
       status: :idle,
       reply_to: nil,
-      task_ref: nil
+      task_ref: nil,
+      pre_turn_context: nil
     }
 
     {:ok, state}
@@ -237,7 +246,8 @@ defmodule ExAgent.Agent do
 
         state = %{
           state
-          | context: Context.add_message(state.context, user_msg),
+          | pre_turn_context: state.context,
+            context: Context.add_message(state.context, user_msg),
             status: :processing
         }
 
@@ -271,14 +281,15 @@ defmodule ExAgent.Agent do
 
         state = %{
           state
-          | context: Context.add_message(state.context, user_msg),
+          | pre_turn_context: state.context,
+            context: Context.add_message(state.context, user_msg),
             status: :processing
         }
 
         state = evaluate_and_apply_skills(state)
 
         effective_tools = get_effective_tools(state)
-        provider = %{state.provider | tools: effective_tools}
+        provider = with_tools(state.provider, effective_tools)
 
         {:reply, {:ok, provider, state.context.messages, effective_tools, stream_opts}, state}
     end
@@ -307,7 +318,12 @@ defmodule ExAgent.Agent do
   @impl true
   def handle_cast({:commit_stream, messages}, state) do
     context = Enum.reduce(messages, state.context, &Context.add_message(&2, &1))
-    {:noreply, %{state | context: context, status: :idle}}
+    {:noreply, %{state | context: trim(state, context), status: :idle}}
+  end
+
+  @impl true
+  def handle_cast(:abort_stream, state) do
+    {:noreply, %{state | context: rollback(state), status: :idle}}
   end
 
   @impl true
@@ -347,173 +363,302 @@ defmodule ExAgent.Agent do
 
   @spec handle_loop_result(term(), state()) :: {term(), state()}
   defp handle_loop_result({:ok, response, loop_state}, state) do
-    {{:ok, response}, %{state | context: loop_state.context, status: :idle}}
+    {{:ok, response}, %{state | context: trim(state, loop_state.context), status: :idle}}
   end
 
   defp handle_loop_result({:handoff, target, context, loop_state}, state) do
     {{:handoff, target, context}, %{state | context: loop_state.context, status: :handed_off}}
   end
 
-  defp handle_loop_result({:error, reason, loop_state}, state) do
-    {{:error, reason}, %{state | context: loop_state.context, status: :idle}}
+  # A turn either completes or it did not happen. Committing a failed turn left a
+  # message the provider had already refused — a rejected attachment, say — in
+  # history to be resent on every later turn, breaking the agent permanently; and
+  # it duplicated the question when the caller retried a transient failure.
+  defp handle_loop_result({:error, reason, _loop_state}, state) do
+    {{:error, reason}, %{state | context: rollback(state), status: :idle}}
   end
+
+  # Bounded history is opt-in: dropping what a user said is the caller's call.
+  @spec trim(state(), Context.t()) :: Context.t()
+  defp trim(%{max_history: nil}, context), do: context
+  defp trim(%{max_history: max}, context), do: Context.trim(context, max)
+
+  @spec rollback(state()) :: Context.t()
+  defp rollback(%{pre_turn_context: nil, context: context}), do: context
+  defp rollback(%{pre_turn_context: context}), do: context
 
   @spec run_tool_loop(state(), [atom()], non_neg_integer()) ::
           {:ok, ExAgent.Response.t(), state()}
           | {:handoff, pid() | atom(), Context.t(), state()}
           | {:error, term(), state()}
-  defp run_tool_loop(state, _opts, iteration) when iteration >= @max_tool_iterations do
+  defp run_tool_loop(%{max_tool_iterations: max} = state, _opts, iteration)
+       when iteration >= max do
     {:error, :max_tool_iterations_reached, state}
   end
 
   defp run_tool_loop(state, opts, iteration) do
     effective_tools = get_effective_tools(state)
     messages = state.context.messages
-    provider = %{state.provider | tools: effective_tools}
+    provider = with_tools(state.provider, effective_tools)
 
     case Provider.chat(provider, messages, opts) do
       {:ok, %ExAgent.Response{} = response} ->
         new_context = Context.add_message(state.context, response.message)
         {:ok, response, %{state | context: new_context}}
 
-      {:tool_call, name, args} ->
-        # Record the assistant's tool call request in context
-        {:ok, assistant_tc_msg} =
-          Message.new(
-            role: :assistant,
-            content: "",
-            tool_calls: [%{"name" => name, "args" => args}]
-          )
-
-        state = %{state | context: Context.add_message(state.context, assistant_tc_msg)}
-
-        case execute_tool(name, args, effective_tools) do
-          {:handoff, target, context} ->
-            {:handoff, target, context, state}
-
-          {:ok, result} ->
-            {:ok, tool_msg} =
-              Message.new(role: :tool, content: to_string(result), tool_call_id: name)
-
-            new_context = Context.add_message(state.context, tool_msg)
-            run_tool_loop(%{state | context: new_context}, opts, iteration + 1)
-
-          {:error, reason} ->
-            {:ok, error_msg} =
-              Message.new(role: :tool, content: "Error: #{inspect(reason)}", tool_call_id: name)
-
-            new_context = Context.add_message(state.context, error_msg)
-            run_tool_loop(%{state | context: new_context}, opts, iteration + 1)
-        end
-
       {:error, reason} ->
         {:error, reason, state}
+
+      tool_request ->
+        run_tool_calls(normalize_calls(tool_request), state, opts, iteration, effective_tools)
     end
   end
 
-  # Resolves tool-call turns (non-streamed) before the final streamed turn.
-  # Returns the message list to stream plus the intermediate messages to commit.
-  @spec resolve_tools(struct(), [Message.t()], keyword(), [Message.t()], non_neg_integer()) ::
-          {:ok, [Message.t()], [Message.t()]} | {:error, term()}
-  defp resolve_tools(_provider, _messages, _opts, _pending, iteration)
-       when iteration >= @max_tool_iterations do
-    {:error, :max_tool_iterations_reached}
-  end
+  # A turn can request several tools at once. Each result is appended before the
+  # next call runs, so the provider sees one response per call — a model that
+  # asked for three and got one back would re-request the missing two forever.
+  @spec run_tool_calls([map()], state(), keyword(), non_neg_integer(), [Tool.t()]) ::
+          {:ok, ExAgent.Response.t(), state()}
+          | {:handoff, pid() | atom(), Context.t(), state()}
+          | {:error, term(), state()}
+  defp run_tool_calls(calls, state, opts, iteration, tools) do
+    {:ok, assistant_msg} = Message.new(role: :assistant, content: "", tool_calls: calls)
+    state = %{state | context: Context.add_message(state.context, assistant_msg)}
 
-  defp resolve_tools(provider, messages, opts, pending, iteration) do
-    case Provider.chat(provider, messages, opts) do
-      {:ok, %ExAgent.Response{}} ->
-        # Final turn: discard its text; stream a fresh generation from `messages`.
-        {:ok, messages, pending}
-
-      {:tool_call, name, args} ->
-        {:ok, tc_msg} =
-          Message.new(
-            role: :assistant,
-            content: "",
-            tool_calls: [%{"name" => name, "args" => args}]
-          )
-
-        result_msg = execute_tool_message(name, args, provider.tools)
-
-        case result_msg do
-          {:error, reason} ->
-            {:error, reason}
-
-          %Message{} = tool_msg ->
-            new_messages = messages ++ [tc_msg, tool_msg]
-
-            resolve_tools(
-              provider,
-              new_messages,
-              opts,
-              pending ++ [tc_msg, tool_msg],
-              iteration + 1
-            )
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+    case Enum.reduce_while(calls, {:cont, state}, &apply_call(&1, &2, tools)) do
+      {:cont, state} -> run_tool_loop(state, opts, iteration + 1)
+      {:handoff, target, context, state} -> {:handoff, target, context, state}
     end
   end
 
-  @spec execute_tool_message(String.t(), map(), [Tool.t()]) :: Message.t() | {:error, term()}
-  defp execute_tool_message(name, args, tools) do
-    case execute_tool(name, args, tools) do
-      {:handoff, _target, _context} ->
-        {:error, :handoff_not_supported_in_stream}
+  @spec apply_call(map(), {:cont, state()}, [Tool.t()]) :: {:cont | :halt, term()}
+  defp apply_call(call, {:cont, state}, tools) do
+    name = call["name"]
+
+    case execute_tool(name, call["args"] || %{}, tools) do
+      {:handoff, target, context} ->
+        {:halt, {:handoff, target, context, state}}
 
       {:ok, result} ->
-        {:ok, msg} = Message.new(role: :tool, content: to_string(result), tool_call_id: name)
-        msg
+        {:cont, {:cont, record_result(state, call, stringify(result))}}
 
       {:error, reason} ->
-        {:ok, msg} =
-          Message.new(role: :tool, content: "Error: #{inspect(reason)}", tool_call_id: name)
-
-        msg
+        {:cont, {:cont, record_result(state, call, "Error: #{inspect(reason)}")}}
     end
   end
 
-  # Wraps the provider stream so the final assistant message (and any pending
-  # tool messages) are committed to the agent's context once fully consumed.
-  @spec committing_stream(GenServer.server(), struct(), [Message.t()], keyword(), [Message.t()]) ::
-          Enumerable.t()
-  defp committing_stream(agent, provider, messages, opts, pending) do
-    provider
-    |> Provider.stream(messages, opts)
-    |> Stream.transform(
-      fn -> {[], []} end,
-      fn chunk, acc -> {[chunk], accumulate(chunk, acc)} end,
-      fn {texts, calls} ->
-        # The after-fun also runs on halt, so a failed or abandoned stream still
-        # releases the agent; leaving it :processing forever is worse than
-        # committing a partial turn, and the user message is already in context.
-        {:ok, final} =
-          Message.new(
-            role: :assistant,
-            content: texts |> Enum.reverse() |> IO.iodata_to_binary(),
-            tool_calls: calls |> Enum.reverse() |> ExAgent.Chunk.finalize_tool_calls()
-          )
+  # The tool name travels alongside the id: OpenAI correlates a result by id,
+  # Gemini by function name, and only one of the two can be the `tool_call_id`.
+  @spec record_result(state(), map(), String.t()) :: state()
+  defp record_result(state, call, content) do
+    {:ok, message} =
+      Message.new(
+        role: :tool,
+        content: content,
+        tool_call_id: call["id"] || call["name"],
+        metadata: %{tool_name: call["name"]}
+      )
 
-        GenServer.cast(agent, {:commit_stream, pending ++ [final]})
-        :ok
-      end
+    %{state | context: Context.add_message(state.context, message)}
+  end
+
+  # Both shapes of the `c:ExAgent.Provider.chat/3` contract, normalized.
+  @spec normalize_calls(term()) :: [map()]
+  defp normalize_calls({:tool_calls, calls}) when is_list(calls), do: calls
+
+  defp normalize_calls({:tool_call, name, args}),
+    do: [%{"id" => name, "name" => name, "args" => args}]
+
+  # A tool is typed `(map() -> any())` and JSON-shaped results are the norm, so
+  # anything that is not already text is encoded rather than crashing the turn.
+  @spec stringify(term()) :: String.t()
+  defp stringify(result) when is_binary(result), do: result
+  defp stringify(result) when is_atom(result) or is_number(result), do: to_string(result)
+
+  defp stringify(result) do
+    case Jason.encode(result) do
+      {:ok, json} -> json
+      {:error, _reason} -> inspect(result)
+    end
+  end
+
+  # Streams every turn, resolving tool calls between them.
+  #
+  # The previous shape ran the whole tool loop *non-streamed* and then threw the
+  # finished answer away to regenerate it as a stream — two full completions for
+  # every streamed turn with tools configured. Here each turn is streamed once:
+  # a turn that ends in tool calls has its `:done` swallowed, its tools run, and
+  # the next turn opened, so the consumer still sees exactly one terminal chunk.
+  @spec turn_stream(GenServer.server(), struct(), [Message.t()], keyword(), [Tool.t()]) ::
+          Enumerable.t()
+  defp turn_stream(agent, provider, messages, opts, tools) do
+    Stream.resource(
+      fn -> open_turn(provider, messages, opts, new_turn_state(messages)) end,
+      &pull(&1, agent, provider, opts, tools),
+      &finish_stream(&1, agent)
     )
+  end
+
+  @spec new_turn_state([Message.t()]) :: map()
+  defp new_turn_state(messages) do
+    %{cont: nil, messages: messages, pending: [], texts: [], calls: [], iteration: 0}
+  end
+
+  # Opens one turn, converting `Provider.stream/3`'s raise into a terminal chunk:
+  # `chat_stream/3` promises never to raise, and a lazy enumerable has nowhere to
+  # carry an error tuple at construction time.
+  @spec open_turn(struct(), [Message.t()], keyword(), map()) :: map()
+  defp open_turn(provider, messages, opts, state) do
+    stream = Provider.stream(provider, messages, opts)
+    %{state | cont: suspendable(stream), messages: messages}
+  rescue
+    error in ExAgent.Error -> Map.put(state, :abort, error)
+  end
+
+  # A pull-based view of an enumerable, so one turn can be consumed lazily and
+  # the next opened only if the model asked for tools.
+  @spec suspendable(Enumerable.t()) :: (term() -> term())
+  defp suspendable(stream) do
+    &Enumerable.reduce(stream, &1, fn chunk, _acc -> {:suspend, chunk} end)
+  end
+
+  @spec pull(map(), GenServer.server(), struct(), keyword(), [Tool.t()]) ::
+          {[ExAgent.Chunk.t()], map()} | {:halt, map()}
+  # Halts with the state, not a sentinel, so the after-fun still sees the turn
+  # it has to commit.
+  defp pull(%{released: true} = state, _agent, _provider, _opts, _tools), do: {:halt, state}
+
+  defp pull(%{abort: error} = state, agent, _provider, _opts, _tools) do
+    # Refused before any request was made. Release the agent and drop the turn,
+    # so one bad attachment does not poison every later one.
+    GenServer.cast(agent, :abort_stream)
+    {[ExAgent.Chunk.error(error)], Map.put(state, :released, true)}
+  end
+
+  defp pull(state, _agent, provider, opts, tools) do
+    case state.cont.({:cont, nil}) do
+      {:suspended, chunk, cont} ->
+        handle_chunk(chunk, %{state | cont: cont}, provider, opts, tools)
+
+      # A provider stream always ends with `:done`; reaching the end without one
+      # still has to terminate the consumer's stream.
+      _done_or_halted ->
+        {[ExAgent.Chunk.done()], Map.put(state, :released, true)}
+    end
+  end
+
+  @spec handle_chunk(ExAgent.Chunk.t(), map(), struct(), keyword(), [Tool.t()]) ::
+          {[ExAgent.Chunk.t()], map()}
+  defp handle_chunk(%ExAgent.Chunk{type: :done} = chunk, state, provider, opts, tools) do
+    calls = ExAgent.Chunk.finalize_tool_calls(Enum.reverse(state.calls)) || []
+
+    if continue?(chunk, calls, tools, state) do
+      continue_turn(calls, state, provider, opts, tools)
+    else
+      # The terminal chunk: emit it, then halt on the next pull so the stream
+      # ends with exactly one `:done`.
+      {[chunk], Map.put(state, :released, true)}
+    end
+  end
+
+  defp handle_chunk(chunk, state, _provider, _opts, _tools),
+    do: {[chunk], accumulate(chunk, state)}
+
+  # Only a turn that actually requested tools the agent can run continues; a
+  # `:tool_calls` finish reason with no executable call would loop forever.
+  @spec continue?(ExAgent.Chunk.t(), [map()], [Tool.t()], map()) :: boolean()
+  defp continue?(%ExAgent.Chunk{finish_reason: :error}, _calls, _tools, _state), do: false
+
+  defp continue?(_chunk, calls, tools, state) do
+    calls != [] and tools != [] and state.iteration < @default_max_tool_iterations
+  end
+
+  @spec continue_turn([map()], map(), struct(), keyword(), [Tool.t()]) ::
+          {[ExAgent.Chunk.t()], map()}
+  defp continue_turn(calls, state, provider, opts, tools) do
+    {:ok, assistant} =
+      Message.new(role: :assistant, content: turn_text(state), tool_calls: calls)
+
+    case tool_messages(calls, tools) do
+      {:error, reason} ->
+        {[ExAgent.Chunk.error(ExAgent.Error.new(:server, "tool failed: #{inspect(reason)}"))],
+         state}
+
+      tool_msgs ->
+        turn = [assistant | tool_msgs]
+
+        state = %{
+          state
+          | pending: state.pending ++ turn,
+            texts: [],
+            calls: [],
+            iteration: state.iteration + 1
+        }
+
+        {[], open_turn(provider, state.messages ++ turn, opts, state)}
+    end
+  end
+
+  @spec turn_text(map()) :: String.t()
+  defp turn_text(%{texts: texts}), do: texts |> Enum.reverse() |> IO.iodata_to_binary()
+
+  # Runs on halt too, so an abandoned stream still releases the agent; leaving it
+  # `:processing` forever is worse than committing a partial turn, and the user
+  # message is already in context.
+  @spec finish_stream(map(), GenServer.server()) :: :ok
+  defp finish_stream(%{abort: _error}, _agent), do: :ok
+
+  defp finish_stream(state, agent) do
+    {:ok, final} =
+      Message.new(
+        role: :assistant,
+        content: turn_text(state),
+        tool_calls: ExAgent.Chunk.finalize_tool_calls(Enum.reverse(state.calls))
+      )
+
+    GenServer.cast(agent, {:commit_stream, state.pending ++ [final]})
+    :ok
+  end
+
+  @spec tool_messages([map()], [Tool.t()]) :: [Message.t()] | {:error, term()}
+  defp tool_messages(calls, tools) do
+    Enum.reduce_while(calls, [], fn call, acc ->
+      case execute_tool(call["name"], call["args"] || %{}, tools) do
+        {:handoff, _target, _context} ->
+          {:halt, {:error, :handoff_not_supported_in_stream}}
+
+        {:ok, result} ->
+          {:cont, acc ++ [tool_message(call, stringify(result))]}
+
+        {:error, reason} ->
+          {:cont, acc ++ [tool_message(call, "Error: #{inspect(reason)}")]}
+      end
+    end)
+  end
+
+  @spec tool_message(map(), String.t()) :: Message.t()
+  defp tool_message(call, content) do
+    {:ok, message} =
+      Message.new(
+        role: :tool,
+        content: content,
+        tool_call_id: call["id"] || call["name"],
+        metadata: %{tool_name: call["name"]}
+      )
+
+    message
   end
 
   # Reasoning traces are deliberately excluded: they are not conversation
   # history, and replaying them corrupts the next turn.
-  @spec accumulate(ExAgent.Chunk.t(), {[String.t()], [ExAgent.Chunk.t()]}) ::
-          {[String.t()], [ExAgent.Chunk.t()]}
-  defp accumulate(%ExAgent.Chunk{type: :text_delta, text: text}, {texts, calls})
-       when is_binary(text),
-       do: {[text | texts], calls}
+  @spec accumulate(ExAgent.Chunk.t(), map()) :: map()
+  defp accumulate(%ExAgent.Chunk{type: :text_delta, text: text}, state) when is_binary(text),
+    do: %{state | texts: [text | state.texts]}
 
-  defp accumulate(%ExAgent.Chunk{type: :tool_call_delta} = chunk, {texts, calls}),
-    do: {texts, [chunk | calls]}
+  defp accumulate(%ExAgent.Chunk{type: :tool_call_delta} = chunk, state),
+    do: %{state | calls: [chunk | state.calls]}
 
-  defp accumulate(_chunk, acc), do: acc
+  defp accumulate(_chunk, state), do: state
 
   @spec execute_tool(String.t(), map(), [Tool.t()]) :: any()
   defp execute_tool(name, args, tools) do
@@ -522,7 +667,9 @@ defmodule ExAgent.Agent do
         {:error, "unknown tool: #{name}"}
 
       %Tool{function: fun} ->
-        normalize_tool_result(fun.(args))
+        ExAgent.Telemetry.span([:tool], %{tool: name}, fn ->
+          normalize_tool_result(fun.(args))
+        end)
     end
   end
 
@@ -535,6 +682,15 @@ defmodule ExAgent.Agent do
   defp normalize_tool_result({:handoff, _target, _context} = handoff), do: handoff
   defp normalize_tool_result(other), do: {:ok, other}
 
+  # Services read tools off the provider struct, so the agent populates the field
+  # — but only when the provider declares one. A provider with no tool support
+  # has no reason to carry it, and a KeyError surfacing as an opaque :server
+  # error is a poor way to say so.
+  @spec with_tools(struct(), [Tool.t()]) :: struct()
+  defp with_tools(provider, tools) do
+    if Map.has_key?(provider, :tools), do: %{provider | tools: tools}, else: provider
+  end
+
   @spec get_effective_tools(state()) :: [Tool.t()]
   defp get_effective_tools(%{tools: tools, active_skill: nil}), do: tools
 
@@ -542,16 +698,16 @@ defmodule ExAgent.Agent do
     tools ++ skill_tools
   end
 
+  # Skills are re-evaluated every turn, so deactivation has to be handled too:
+  # applying one used to overwrite the provider's system prompt permanently,
+  # leaving a "SQL expert" answering jokes for the rest of the process's life.
   @spec evaluate_and_apply_skills(state()) :: state()
   defp evaluate_and_apply_skills(%{skills: []} = state), do: state
 
   defp evaluate_and_apply_skills(state) do
     case SkillsPattern.evaluate_skills(state.skills, state.context) do
-      nil ->
-        state
-
-      %Skill{} = skill ->
-        SkillsPattern.apply_skill(state, skill)
+      nil -> SkillsPattern.clear_skill(state)
+      %Skill{} = skill -> SkillsPattern.apply_skill(state, skill)
     end
   end
 

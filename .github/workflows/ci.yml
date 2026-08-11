@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A new push to a PR makes the run in flight irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+
+jobs:
+  test:
+    name: Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: "1.18"
+            otp: "27"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+
+      # Keyed on mix.lock, so the cache is reused until a dependency actually
+      # changes. The version pair is in the key because BEAM artifacts are not
+      # portable across compiler versions.
+      - name: Restore dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-${{ steps.beam.outputs.elixir-version }}-${{ steps.beam.outputs.otp-version }}-
+
+      - run: mix deps.get
+
+      # A lock entry nothing depends on is a supply-chain footgun in a library.
+      - run: mix deps.unlock --check-unused
+
+      - run: mix format --check-formatted
+
+      # --force so a warning introduced in an unchanged file cannot be hidden by
+      # the restored build cache. Only this project recompiles; deps stay cached.
+      - run: mix compile --force --warnings-as-errors
+
+      # `:external` tests hit real provider APIs and are excluded by
+      # test/test_helper.exs, so CI needs no credentials.
+      - run: mix test

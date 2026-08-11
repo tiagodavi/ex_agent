@@ -106,8 +106,21 @@ defmodule ExAgent.Services.GeminiEmbedService do
      )}
   end
 
-  @spec validate_task(Embeddings.task() | nil) :: :ok | {:error, Error.t()}
+  @spec validate_task(Embeddings.task_input() | nil) :: :ok | {:error, Error.t()}
   defp validate_task(nil), do: :ok
+
+  # Gemini's taskType is a closed enum, so a raw string is a typo far more often
+  # than a new value — and `:embedding_family` already covers model drift.
+  defp validate_task(task) when is_binary(task) do
+    {:error,
+     Error.new(
+       :invalid_request,
+       "Gemini takes a normalized task atom, not the string #{inspect(task)}; " <>
+         "expected one of #{inspect(Embeddings.tasks())}. Verbatim task strings are " <>
+         "an OpenAI-compatible-endpoint feature, where the vocabulary is model-specific",
+       Gemini
+     )}
+  end
 
   defp validate_task(task) do
     if Embeddings.valid_task?(task) do
@@ -160,7 +173,7 @@ defmodule ExAgent.Services.GeminiEmbedService do
       "model" => "models/#{model}",
       "content" => %{"parts" => [%{"text" => input.content}]}
     }
-    |> maybe_put("taskType", task && @task_types[task])
+    |> maybe_put("taskType", task_type(task))
     |> maybe_put("outputDimensionality", dimensions)
   end
 
@@ -171,6 +184,10 @@ defmodule ExAgent.Services.GeminiEmbedService do
     }
     |> maybe_put("outputDimensionality", dimensions)
   end
+
+  @spec task_type(Embeddings.task() | nil) :: String.t() | nil
+  defp task_type(nil), do: nil
+  defp task_type(task), do: @task_types[task]
 
   @spec apply_prefix(map(), Embeddings.task() | nil) :: String.t()
   defp apply_prefix(%{content: content}, nil), do: content

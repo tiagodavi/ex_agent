@@ -33,9 +33,11 @@ defmodule ExAgent.Patterns.Handoff do
         },
         "required" => ["summary"]
       },
-      function: fn %{"summary" => summary} ->
-        context = transfer_context(Context.new(), %{"summary" => summary})
-        {:handoff, target, context}
+      function: fn args ->
+        # Models skip "required" arguments; handing off with an empty summary
+        # beats crashing the turn that asked for it.
+        summary = Map.get(args, "summary") || "(no summary provided)"
+        {:handoff, target, transfer_context(Context.new(), %{"summary" => summary})}
       end
     }
   end

@@ -55,6 +55,11 @@ defmodule ExAgent do
   carrying a `:retryable?` flag, so retry logic is written once rather than per
   provider.
 
+  ## Observability
+
+  Every provider call emits `:telemetry` events — latency, token counts, and the
+  normalized error type. See `ExAgent.Telemetry`.
+
   ## Multi-agent patterns
 
   - `ExAgent.Patterns.Subagents` — centralized orchestration, isolated contexts
@@ -112,7 +117,7 @@ defmodule ExAgent do
 
   Stateless: no agent process, no conversation history, no tool loop. If the
   role's provider carries `tools:`, a tool request comes back as the raw
-  `{:tool_call, name, args}` from `c:ExAgent.Provider.chat/3` — **tools are not
+  `{:tool_calls, calls}` from `c:ExAgent.Provider.chat/3` — **tools are not
   executed**. Use `start_agent(role: role, tools: [...])` when you want the loop.
 
   Accepts the same `:files` option as `chat/3`.
@@ -122,7 +127,7 @@ defmodule ExAgent do
   """
   @spec chat_with(atom(), String.t(), keyword()) ::
           {:ok, ExAgent.Response.t()}
-          | {:tool_call, String.t(), map()}
+          | {:tool_calls, [map()]}
           | {:error, ExAgent.Error.t()}
   def chat_with(role, input, opts \\ []) when is_atom(role) and is_binary(input) do
     with {:ok, message} <- user_message(input, opts) do
@@ -418,11 +423,14 @@ defmodule ExAgent do
   - `:model` - embedding model (each provider has its own default; this is never
     the provider's *chat* model)
   - `:dimensions` - output dimensionality, where the provider supports truncation
-  - `:task` - what the embedding is for, from `ExAgent.Embeddings.tasks/0`.
-    Providers that cannot express it return
+  - `:task` - what the embedding is for. Either a normalized atom from
+    `ExAgent.Embeddings.tasks/0`, translated per provider, or a raw string sent
+    verbatim for a vocabulary this library does not model (Jina's
+    `"text-matching"`, a Gemini `taskType` newer than this release). Providers
+    that cannot express a task at all return
     `{:error, %ExAgent.Error{type: :unsupported}}` rather than dropping it
-  - `:task_map` - override the provider's task-string translation (OpenAI-compatible
-    endpoints only, where the strings are model-specific)
+  - `:task_map` - override the atom translation (OpenAI-compatible endpoints
+    only, where the strings are model-specific); ignored when `:task` is a string
 
   ## Examples
 

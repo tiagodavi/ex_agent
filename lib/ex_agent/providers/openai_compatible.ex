@@ -44,6 +44,21 @@ defmodule ExAgent.Providers.OpenAICompatible do
   does not. It defaults to `[:text]`, so a misconfigured deployment fails loudly
   rather than firing video at a model that cannot read it.
 
+  All four media modalities are declarable — `:image`, `:video`, `:audio`, and
+  `:document`. Documents are shaped as the dialect's `file` content part
+  (`file_data` for bytes, `file_url` for a URL), which is what a gateway fronting
+  a document-reading model expects:
+
+      OpenAICompatible.new(
+        base_url: "https://openrouter.ai/api/v1",
+        model: "anthropic/claude-sonnet-4.5",
+        api_key: key,
+        modalities: [:text, :image, :document]
+      )
+
+  Declare only what the served model actually reads: nothing here is validated
+  against the endpoint until the request is made.
+
   ## No Files API
 
   Compatible endpoints have no upload endpoint, so bytes are always sent as
@@ -51,8 +66,6 @@ defmodule ExAgent.Providers.OpenAICompatible do
   `{:error, %ExAgent.Error{type: :unsupported}}` telling you to host the asset at
   a URL the container can reach — it is never silently truncated or retried.
 
-  Documents are not supported: there is no portable content part for them.
-  Extract the text or rasterize the pages first.
 
   ## Verifying the served model
 
@@ -67,7 +80,9 @@ defmodule ExAgent.Providers.OpenAICompatible do
 
   @behaviour ExAgent.Provider
 
-  require Logger
+  # See `ExAgent.Providers.OpenAI`. `:headers` is redacted too — this is where
+  # Modal keys and other gateway credentials live.
+  @derive {Inspect, except: [:api_key, :headers, :req]}
 
   alias ExAgent.Error
 
@@ -95,8 +110,8 @@ defmodule ExAgent.Providers.OpenAICompatible do
     headers: [],
     modalities: [:text],
     max_inline_bytes: 33_554_432,
-    temperature: 0.6,
-    max_tokens: 512,
+    temperature: nil,
+    max_tokens: nil,
     tools: []
   ]
 
@@ -123,8 +138,16 @@ defmodule ExAgent.Providers.OpenAICompatible do
       default: 33_554_432,
       doc: "Largest attachment sent as a data URI; there is no upload fallback"
     ],
-    temperature: [type: {:or, [:float, nil]}, default: 0.6],
-    max_tokens: [type: {:or, [:pos_integer, nil]}, default: 512],
+    temperature: [
+      type: {:or, [:float, :integer, nil]},
+      default: nil,
+      doc: "Sampling temperature; omitted from the request when nil"
+    ],
+    max_tokens: [
+      type: {:or, [:pos_integer, nil]},
+      default: nil,
+      doc: "Output token ceiling; omitted when nil"
+    ],
     system_prompt: [type: {:or, [:string, nil]}, default: nil, doc: "System prompt"],
     tools: [type: {:list, :any}, default: [], doc: "Available tools"]
   ]

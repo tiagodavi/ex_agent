@@ -41,31 +41,57 @@ defmodule ExAgent.Services.OpenAIDialect do
 
   @doc false
   @spec parse_response(map(), module()) ::
-          {:ok, Response.t()} | {:tool_call, String.t(), map()} | {:error, Error.t()}
-  def parse_response(%{"choices" => [choice | _]} = body, _provider) do
-    message = choice["message"]
+          {:ok, Response.t()}
+          | {:tool_calls, [map()]}
+          | {:error, Error.t()}
+  def parse_response(
+        %{"choices" => [%{"message" => %{} = message} | _] = choices} = body,
+        provider
+      ) do
+    choice = hd(choices)
 
-    case message do
-      %{"tool_calls" => [%{"function" => %{"name" => name, "arguments" => args}} | _]} ->
-        {:tool_call, name, decode_arguments(args)}
-
-      %{"content" => content} ->
-        assistant = %Message{
-          role: :assistant,
-          content: content || "",
-          tool_calls: message["tool_calls"]
-        }
-
-        {:ok,
-         Response.new(assistant,
-           thinking: message["reasoning_content"],
-           usage: usage_map(body["usage"]),
-           finish_reason: Chunk.finish_reason(choice["finish_reason"])
-         )}
+    case tool_calls(message) do
+      [] -> text_response(message, choice, body, provider)
+      calls -> {:tool_calls, calls}
     end
   end
 
   def parse_response(body, provider), do: {:error, Error.unexpected_response(body, provider)}
+
+  # Every requested call is returned. Taking only the first left the model
+  # believing tools ran that never did.
+  @spec tool_calls(map()) :: [map()]
+  defp tool_calls(%{"tool_calls" => calls}) when is_list(calls) do
+    for %{"function" => %{"name" => name} = function} = call <- calls do
+      %{
+        # The API's own id is what a tool result must be correlated by.
+        "id" => Map.get(call, "id") || name,
+        "name" => name,
+        "args" => decode_arguments(Map.get(function, "arguments"))
+      }
+    end
+  end
+
+  defp tool_calls(_message), do: []
+
+  # A message with neither content nor tool calls — a bare refusal, say — is an
+  # unparseable shape, not a crash.
+  @spec text_response(map(), map(), map(), module()) ::
+          {:ok, Response.t()} | {:error, Error.t()}
+  defp text_response(%{"content" => content} = message, choice, body, _provider)
+       when is_binary(content) or is_nil(content) do
+    assistant = %Message{role: :assistant, content: content || "", tool_calls: nil}
+
+    {:ok,
+     Response.new(assistant,
+       thinking: message["reasoning_content"],
+       usage: usage_map(body["usage"]),
+       finish_reason: Chunk.finish_reason(choice["finish_reason"])
+     )}
+  end
+
+  defp text_response(_message, _choice, body, provider),
+    do: {:error, Error.unexpected_response(body, provider)}
 
   @spec usage_map(term()) :: map()
   defp usage_map(%{} = usage) do
@@ -189,10 +215,13 @@ defmodule ExAgent.Services.OpenAIDialect do
     %{"role" => to_string(role), "content" => content}
   end
 
+  # The id the API issued, so a tool result correlates back to the right call —
+  # the name is only a fallback for a provider that has none, and it collides as
+  # soon as the model calls one tool twice in a turn.
   @spec format_tool_call(map()) :: map()
   defp format_tool_call(tool_call) do
     %{
-      "id" => tool_call["name"],
+      "id" => tool_call["id"] || tool_call["name"],
       "type" => "function",
       "function" => %{
         "name" => tool_call["name"],
@@ -226,11 +255,13 @@ defmodule ExAgent.Services.OpenAIDialect do
     }
   end
 
-  @spec decode_arguments(String.t()) :: map()
-  defp decode_arguments(args) do
+  @spec decode_arguments(String.t() | nil) :: map()
+  defp decode_arguments(args) when is_binary(args) do
     case Jason.decode(args) do
-      {:ok, decoded} -> decoded
-      {:error, _} -> %{"raw" => args}
+      {:ok, decoded} when is_map(decoded) -> decoded
+      _other -> %{"raw" => args}
     end
   end
+
+  defp decode_arguments(_args), do: %{}
 end

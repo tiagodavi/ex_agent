@@ -14,8 +14,8 @@ defmodule ExAgent.Services.OpenAICompatibleService do
   alias ExAgent.{Attachment, Error, Message, Source}
 
   @chat_opts_schema [
-    temperature: [type: {:or, [:float, nil]}, default: 0.6],
-    max_tokens: [type: {:or, [:pos_integer, nil]}, default: 512],
+    temperature: [type: {:or, [:float, :integer, nil]}],
+    max_tokens: [type: {:or, [:pos_integer, nil]}],
     tool_choice: [type: {:or, [:string, :map]}, default: "auto"]
   ]
 
@@ -23,7 +23,9 @@ defmodule ExAgent.Services.OpenAICompatibleService do
   Sends a chat completion request to an OpenAI-compatible endpoint.
   """
   @spec chat(OpenAICompatible.t(), [Message.t()], keyword()) ::
-          {:ok, Response.t()} | {:tool_call, String.t(), map()} | {:error, Error.t()}
+          {:ok, Response.t()}
+          | {:tool_calls, [map()]}
+          | {:error, Error.t()}
   def chat(%OpenAICompatible{} = provider, messages, opts \\ []) do
     with {:ok, messages} <- prepare_attachments(provider, messages) do
       opts = prepare_opts(provider, opts)
@@ -138,10 +140,30 @@ defmodule ExAgent.Services.OpenAICompatibleService do
   end
 
   # Media parts follow the `{"type" => "<kind>_url", "<kind>_url" => %{"url" => ...}}`
-  # shape, where the URL may be a `data:` URI. Whether a given served model
-  # accepts video_url/audio_url is model-dependent, which is why `:modalities`
-  # must be declared per deployment.
+  # shape, where the URL may be a `data:` URI. Documents use the dialect's `file`
+  # part instead. Whether a served model accepts any of them is model-dependent,
+  # which is why `:modalities` must be declared per deployment.
   @spec format_attachment(map()) :: map()
+  defp format_attachment(%{modality: :document, kind: :url, url: url} = attachment) do
+    file = %{"file_url" => url}
+    file = if attachment.filename, do: Map.put(file, "filename", attachment.filename), else: file
+
+    %{"type" => "file", "file" => file}
+    |> merge_provider_opts(attachment)
+  end
+
+  defp format_attachment(%{modality: :document} = attachment) do
+    # `filename` is required alongside `file_data`; gateways reject the part
+    # without it, so fall back rather than omitting the key.
+    filename = Map.get(attachment, :filename) || "upload"
+
+    %{
+      "type" => "file",
+      "file" => %{"filename" => filename, "file_data" => attachment_url(attachment)}
+    }
+    |> merge_provider_opts(attachment)
+  end
+
   defp format_attachment(%{modality: modality} = attachment) do
     key = part_key(modality)
 
@@ -150,7 +172,6 @@ defmodule ExAgent.Services.OpenAICompatibleService do
   end
 
   @spec part_key(Source.modality()) :: String.t()
-  defp part_key(:image), do: "image_url"
   defp part_key(:video), do: "video_url"
   defp part_key(:audio), do: "audio_url"
   defp part_key(_modality), do: "image_url"

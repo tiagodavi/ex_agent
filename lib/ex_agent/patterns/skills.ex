@@ -26,11 +26,38 @@ defmodule ExAgent.Patterns.Skills do
   @doc """
   Applies a skill to the agent state by updating the active_skill
   and injecting the skill's system prompt into the provider.
+
+  Providers with no `:system_prompt` field keep the skill's tools; the prompt
+  simply has nowhere to go.
   """
   @spec apply_skill(map(), Skill.t()) :: map()
   def apply_skill(state, %Skill{} = skill) do
-    provider = %{state.provider | system_prompt: skill.system_prompt}
-    %{state | provider: provider, active_skill: skill}
+    %{state | provider: put_prompt(state.provider, skill.system_prompt), active_skill: skill}
+  end
+
+  @doc """
+  Deactivates the active skill, restoring the agent's own system prompt.
+
+  Skills are evaluated before every turn, so one that stops matching has to be
+  undone — otherwise the first activation would overwrite the agent's persona
+  permanently.
+  """
+  @spec clear_skill(map()) :: map()
+  def clear_skill(%{active_skill: nil} = state), do: state
+
+  def clear_skill(state) do
+    %{
+      state
+      | provider: put_prompt(state.provider, Map.get(state, :base_system_prompt)),
+        active_skill: nil
+    }
+  end
+
+  @spec put_prompt(struct(), String.t() | nil) :: struct()
+  defp put_prompt(provider, prompt) do
+    if Map.has_key?(provider, :system_prompt),
+      do: %{provider | system_prompt: prompt},
+      else: provider
   end
 
   @doc """

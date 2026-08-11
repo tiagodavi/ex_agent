@@ -36,7 +36,12 @@ defmodule ExAgent.Patterns.Subagents do
           },
           "required" => ["query"]
         },
-        function: fn %{"query" => query} -> invoke_subagent(spec, query) end
+        # Models omit "required" arguments; a FunctionClauseError here would
+        # crash the orchestrator's whole turn instead of telling it what it did.
+        function: fn
+          %{"query" => query} when is_binary(query) -> invoke_subagent(spec, query)
+          _args -> {:error, ~s(#{spec.name} requires a "query" string)}
+        end
       }
     end)
   end
@@ -50,8 +55,11 @@ defmodule ExAgent.Patterns.Subagents do
   @spec invoke_subagent(subagent_spec(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def invoke_subagent(spec, query) do
     {:ok, user_msg} = Message.new(role: :user, content: query)
-    provider = maybe_set_system_prompt(spec.provider, spec[:system_prompt])
-    provider = %{provider | tools: spec[:tools] || []}
+
+    provider =
+      spec.provider
+      |> put_field(:system_prompt, spec[:system_prompt])
+      |> put_field(:tools, spec[:tools] || [])
 
     case Provider.chat(provider, [user_msg], []) do
       {:ok, %ExAgent.Response{content: content}} ->
@@ -60,7 +68,7 @@ defmodule ExAgent.Patterns.Subagents do
       {:error, reason} ->
         {:error, reason}
 
-      {:tool_call, _name, _args} ->
+      _tool_request ->
         {:ok, "Subagent requested a tool call but tools are not executed in subagent mode."}
     end
   end
@@ -79,15 +87,21 @@ defmodule ExAgent.Patterns.Subagents do
     |> Task.async_stream(
       fn {spec, input} -> {spec.name, invoke_subagent(spec, input)} end,
       timeout: timeout,
-      on_timeout: :kill_task
+      on_timeout: :kill_task,
+      zip_input_on_exit: true
     )
     |> Enum.map(fn
       {:ok, {name, result}} -> {name, result}
-      {:exit, :timeout} -> {"unknown", {:error, :timeout}}
+      {:exit, {{%{name: name}, _input}, reason}} -> {name, {:error, reason}}
     end)
   end
 
-  @spec maybe_set_system_prompt(struct(), String.t() | nil) :: struct()
-  defp maybe_set_system_prompt(provider, nil), do: provider
-  defp maybe_set_system_prompt(provider, prompt), do: %{provider | system_prompt: prompt}
+  # Only providers that declare the field get it; a third-party provider without
+  # `:system_prompt` or `:tools` is not required to grow one.
+  @spec put_field(struct(), atom(), term()) :: struct()
+  defp put_field(provider, _key, nil), do: provider
+
+  defp put_field(provider, key, value) do
+    if Map.has_key?(provider, key), do: Map.put(provider, key, value), else: provider
+  end
 end

@@ -64,12 +64,49 @@ defmodule ExAgent.FileRefTest do
   end
 
   # Edge case tests
-  describe "new/1 edge cases" do
-    test "returns error for invalid provider" do
-      assert {:error, "invalid provider: :anthropic" <> _} =
-               FileRef.new(provider: :anthropic, mime_type: "text/plain")
+  # A third-party provider implementing the optional upload/4 callback has to be
+  # able to build the reference its own callback returns. The built-in services
+  # construct %FileRef{} structs directly, so a closed provider list here never
+  # protected them — it only walled out everyone else.
+  describe "new/1 for custom providers" do
+    test "accepts a provider this library has never heard of" do
+      assert {:ok, ref} =
+               FileRef.new(provider: :anthropic, file_id: "file-abc", mime_type: "text/plain")
+
+      assert ref.provider == :anthropic
+      assert ref.file_id == "file-abc"
     end
 
+    test "accepts a custom provider identified by URI instead of id" do
+      assert {:ok, ref} =
+               FileRef.new(
+                 provider: :my_llm,
+                 file_uri: "https://x.test/f/1",
+                 mime_type: "text/csv"
+               )
+
+      assert ref.file_uri == "https://x.test/f/1"
+    end
+
+    test "still requires the reference to actually reference something" do
+      assert {:error, message} = FileRef.new(provider: :anthropic, mime_type: "text/plain")
+
+      assert message =~ ":file_id"
+      assert message =~ ":file_uri"
+    end
+
+    test "keeps enforcing the built-in providers' own field rules" do
+      # OpenAI and Gemini services pattern-match on these fields, so a ref
+      # carrying the wrong one would fail later and less clearly.
+      assert {:error, "OpenAI file references require :file_id"} =
+               FileRef.new(provider: :openai, file_uri: "https://x", mime_type: "text/plain")
+
+      assert {:error, "Gemini file references require :file_uri"} =
+               FileRef.new(provider: :gemini, file_id: "file-abc", mime_type: "text/plain")
+    end
+  end
+
+  describe "new/1 edge cases" do
     test "returns error for missing mime_type" do
       assert {:error, "mime_type is required"} =
                FileRef.new(provider: :openai, file_id: "file-abc")

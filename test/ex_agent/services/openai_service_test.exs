@@ -88,8 +88,10 @@ defmodule ExAgent.Services.OpenAIServiceTest do
 
       {:ok, msg} = Message.new(role: :user, content: "Search for elixir")
 
-      assert {:tool_call, "search", %{"query" => "elixir"}} =
+      assert {:tool_calls, [%{"id" => "call_123", "name" => "search", "args" => args}]} =
                OpenAIService.chat(provider, [msg])
+
+      assert args == %{"query" => "elixir"}
     end
   end
 
@@ -178,7 +180,7 @@ defmodule ExAgent.Services.OpenAIServiceTest do
       provider = build_provider(fn conn -> Req.Test.json(conn, response) end)
       {:ok, msg} = Message.new(role: :user, content: "Test")
 
-      assert {:tool_call, "test", %{"raw" => "not-json"}} =
+      assert {:tool_calls, [%{"name" => "test", "args" => %{"raw" => "not-json"}}]} =
                OpenAIService.chat(provider, [msg])
     end
 
@@ -272,34 +274,24 @@ defmodule ExAgent.Services.OpenAIServiceTest do
   end
 
   describe "chat/3 file_ref attachments" do
-    test "formats image file_ref as image_file with file_id" do
+    # Verified against the live API: `image_file` is rejected outright, and
+    # neither `image_url.url`, `image_url.file_id`, nor `file.file_id` accepts an
+    # uploaded image. There is no shape that works, so the request is refused
+    # before it is spent.
+    test "given an uploaded image reference, then it is refused with an actionable message" do
       {:ok, ref} =
-        ExAgent.FileRef.new(
-          provider: :openai,
-          file_id: "file-img123",
-          mime_type: "image/png"
-        )
+        ExAgent.FileRef.new(provider: :openai, file_id: "file-img123", mime_type: "image/png")
 
-      provider =
-        build_provider(fn conn ->
-          {:ok, body, conn} = Plug.Conn.read_body(conn)
-          parsed = Jason.decode!(body)
-          [msg] = parsed["messages"]
-          [file_part, text_part] = msg["content"]
-          assert file_part["type"] == "image_file"
-          assert file_part["image_file"]["file_id"] == "file-img123"
-          assert text_part["type"] == "text"
-          Req.Test.json(conn, success_response("An image"))
-        end)
+      provider = build_provider(fn conn -> Req.Test.json(conn, success_response("never")) end)
 
       {:ok, msg} =
-        Message.new(
-          role: :user,
-          content: "Describe this",
-          attachments: [%{file_ref: ref}]
-        )
+        Message.new(role: :user, content: "Describe this", attachments: [%{file_ref: ref}])
 
-      assert {:ok, _} = OpenAIService.chat(provider, [msg])
+      assert {:error, %ExAgent.Error{type: :unsupported} = error} =
+               OpenAIService.chat(provider, [msg])
+
+      assert error.message =~ "cannot reference an uploaded image"
+      assert error.message =~ "%{path: ...}"
     end
 
     test "formats non-image file_ref as file with file_id" do

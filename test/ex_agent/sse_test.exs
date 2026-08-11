@@ -51,7 +51,8 @@ defmodule ExAgent.SSETest do
     end
 
     test "given multiple data lines, then they are joined" do
-      assert SSE.event_data("data: one\ndata: two") == "onetwo"
+      # The spec joins consecutive data lines with a newline.
+      assert SSE.event_data("data: one\ndata: two") == "one\ntwo"
     end
 
     test "given non-data lines, then they are ignored" do
@@ -69,7 +70,7 @@ defmodule ExAgent.SSETest do
 
     test "given CRLF line endings, then no carriage return leaks into the payload" do
       assert SSE.event_data("event: message\r\ndata: payload") == "payload"
-      assert SSE.event_data("data: one\r\ndata: two") == "onetwo"
+      assert SSE.event_data("data: one\r\ndata: two") == "one\ntwo"
       assert SSE.event_data("data: [DONE]\r\n") == :done
     end
   end
