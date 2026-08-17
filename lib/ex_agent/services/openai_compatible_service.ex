@@ -10,13 +10,15 @@ defmodule ExAgent.Services.OpenAICompatibleService do
   """
 
   alias ExAgent.Providers.OpenAICompatible
-  alias ExAgent.Services.{OpenAIDialect, Streaming}
+  alias ExAgent.Services.{OpenAIDialect, Streaming, Structured}
   alias ExAgent.{Attachment, Error, Message, Source}
 
   @chat_opts_schema [
     temperature: [type: {:or, [:float, :integer, nil]}],
     max_tokens: [type: {:or, [:pos_integer, nil]}],
-    tool_choice: [type: {:or, [:string, :map]}, default: "auto"]
+    tool_choice: [type: {:or, [:string, :map]}, default: "auto"],
+    schema: [type: :any],
+    schema_doc: [type: {:or, [:string, nil]}]
   ]
 
   @doc """
@@ -30,17 +32,48 @@ defmodule ExAgent.Services.OpenAICompatibleService do
     with {:ok, messages} <- prepare_attachments(provider, messages) do
       opts = prepare_opts(provider, opts)
 
-      provider.req
-      |> Req.post(
-        url: "/chat/completions",
-        json: build_chat_body(provider, messages, opts),
-        connect_options: [timeout: :timer.minutes(5)],
-        receive_timeout: :timer.minutes(5)
-      )
-      |> Error.from_result(OpenAICompatible)
-      |> case do
-        {:ok, response_body} -> OpenAIDialect.parse_response(response_body, OpenAICompatible)
-        {:error, _error} = failure -> failure
+      with {:ok, format} <- response_format(opts) do
+        provider.req
+        |> Req.post(
+          url: "/chat/completions",
+          json: build_chat_body(provider, messages, opts, format),
+          connect_options: [timeout: :timer.minutes(5)],
+          receive_timeout: :timer.minutes(5)
+        )
+        |> Error.from_result(OpenAICompatible)
+        |> case do
+          {:ok, response_body} ->
+            response_body
+            |> OpenAIDialect.parse_response(OpenAICompatible)
+            |> Structured.decode(opts[:schema], OpenAICompatible)
+
+          {:error, _error} = failure ->
+            failure
+        end
+      end
+    end
+  end
+
+  # `response_format` and not `guided_json`: vLLM accepts the latter, ignores it,
+  # and answers with prose - verified against a running deployment. A server that
+  # ignores `response_format` too is caught when the cast fails.
+  @spec response_format(keyword()) :: {:ok, map() | nil} | {:error, Error.t()}
+  defp response_format(opts) do
+    with {:ok, json_schema} <- Structured.json_schema(opts[:schema], :openai, opts) do
+      case json_schema do
+        nil ->
+          {:ok, nil}
+
+        schema ->
+          {:ok,
+           %{
+             "type" => "json_schema",
+             "json_schema" => %{
+               "name" => Structured.name(opts[:schema]),
+               "strict" => true,
+               "schema" => schema
+             }
+           }}
       end
     end
   end
@@ -58,9 +91,15 @@ defmodule ExAgent.Services.OpenAICompatibleService do
 
     opts = prepare_opts(provider, opts)
 
+    format =
+      case response_format(opts) do
+        {:ok, format} -> format
+        {:error, error} -> raise error
+      end
+
     body =
       provider
-      |> build_chat_body(messages, opts)
+      |> build_chat_body(messages, opts, format)
       |> Map.put("stream", true)
       |> Map.put("stream_options", %{"include_usage" => true})
 
@@ -72,14 +111,15 @@ defmodule ExAgent.Services.OpenAICompatibleService do
     )
   end
 
-  @spec build_chat_body(OpenAICompatible.t(), [Message.t()], keyword()) :: map()
-  defp build_chat_body(provider, messages, opts) do
+  @spec build_chat_body(OpenAICompatible.t(), [Message.t()], keyword(), map() | nil) :: map()
+  defp build_chat_body(provider, messages, opts, response_format) do
     OpenAIDialect.build_body(provider.model, messages,
       system_prompt: provider.system_prompt,
       tools: provider.tools,
       tool_choice: opts[:tool_choice],
       temperature: opts[:temperature],
       max_tokens: opts[:max_tokens],
+      response_format: response_format,
       attachment_formatter: &format_attachment/1
     )
   end

@@ -26,6 +26,8 @@ defmodule ExAgent.Error do
   | `:rate_limit` | Rate or quota limit hit (429) | yes |
   | `:context_length` | Input exceeds the model's context window | no |
   | `:invalid_request` | Malformed request (other 4xx) | no |
+  | `:invalid_response` | The model's output does not fit the requested schema | no |
+  | `:refusal` | The model declined to answer | no |
   | `:unsupported` | The provider cannot perform this operation | no |
   | `:server` | Provider-side failure (5xx, unexpected response shape) | yes for 5xx |
   | `:transport` | Connection-level failure | yes |
@@ -35,6 +37,10 @@ defmodule ExAgent.Error do
           :auth
           | :rate_limit
           | :invalid_request
+          # Not retryable: under constrained decoding a mismatch means the
+          # endpoint is not honoring the schema, which resending will not fix.
+          | :invalid_response
+          | :refusal
           | :context_length
           | :unsupported
           | :not_found

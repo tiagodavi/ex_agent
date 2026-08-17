@@ -11,11 +11,14 @@ defmodule ExAgent.Test.FakeSSE do
   It drives the real receive loop and the real `Req.parse_message/2` path - only
   the socket is replaced.
 
-      req = Req.new(adapter: FakeSSE.adapter(["data: {\\"a\\":1}\\n", "\\n"]))
+      req = FakeSSE.req(["data: {\\"a\\":1}\\n", "\\n"])
   """
 
   @doc """
-  Builds an adapter that sends each element of `parts` as its own data message.
+  Builds a `Req` that sends each element of `parts` as its own data message.
+
+  The parts ride along in the request's private storage because Req expects an
+  adapter to be a module, not a closure.
 
   ## Options
 
@@ -23,37 +26,42 @@ defmodule ExAgent.Test.FakeSSE do
   - `:error` - a transport reason delivered after `parts`, instead of a clean
     close, to simulate a mid-stream failure
   """
-  @spec adapter([binary()], keyword()) ::
-          (Req.Request.t() -> {Req.Request.t(), Req.Response.t()})
-  def adapter(parts, opts \\ []) do
+  @spec req([binary()], keyword()) :: Req.Request.t()
+  def req(parts, opts \\ []) do
+    Req.new(adapter: __MODULE__)
+    |> Req.Request.put_private(:fake_sse, {parts, opts})
+  end
+
+  @doc false
+  @spec run(Req.Request.t()) :: {Req.Request.t(), Req.Response.t()}
+  def run(request) do
+    {parts, opts} = Req.Request.get_private(request, :fake_sse)
     status = Keyword.get(opts, :status, 200)
     error = Keyword.get(opts, :error)
 
-    fn request ->
-      ref = make_ref()
-      owner = self()
+    ref = make_ref()
+    owner = self()
 
-      Enum.each(parts, fn part -> send(owner, {__MODULE__, ref, {:data, part}}) end)
+    Enum.each(parts, fn part -> send(owner, {__MODULE__, ref, {:data, part}}) end)
 
-      if error do
-        send(owner, {__MODULE__, ref, {:error, error}})
-      else
-        send(owner, {__MODULE__, ref, :done})
-      end
-
-      response = %Req.Response{
-        status: status,
-        headers: %{"content-type" => ["text/event-stream"]},
-        body: %Req.Response.Async{
-          pid: owner,
-          ref: ref,
-          stream_fun: &stream_fun/2,
-          cancel_fun: &cancel_fun/1
-        }
-      }
-
-      {request, response}
+    if error do
+      send(owner, {__MODULE__, ref, {:error, error}})
+    else
+      send(owner, {__MODULE__, ref, :done})
     end
+
+    response = %Req.Response{
+      status: status,
+      headers: %{"content-type" => ["text/event-stream"]},
+      body: %Req.Response.Async{
+        pid: owner,
+        ref: ref,
+        stream_fun: &stream_fun/2,
+        cancel_fun: &cancel_fun/1
+      }
+    }
+
+    {request, response}
   end
 
   @doc """

@@ -211,6 +211,9 @@ defmodule ExAgent.Providers.OpenAICompatible do
   end
 
   @impl true
+  def supports_structured_output?(_provider), do: true
+
+  @impl true
   def chat(provider, messages, opts \\ []) do
     ExAgent.Services.OpenAICompatibleService.chat(provider, messages, opts)
   end

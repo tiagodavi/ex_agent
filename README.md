@@ -9,6 +9,7 @@ any OpenAI-compatible endpoint; OTP primitives orchestrate them.
 - **Config-driven roles** - name a purpose (`:vision`, `:embed`), not a vendor
 - **Structured streaming** - text, reasoning, tool-call deltas, usage as typed chunks
 - **Automatic tool execution** - define a tool once; the agent loops until done
+- **Structured output** - describe the shape with an `Ecto` schema, get a struct back
 - **Multimodal** - images, PDFs, video, audio from a path, bytes, a URL, or an upload
 - **Embeddings and reranking for RAG** - each provider's own task vocabulary, provenance on
   every result, cross-encoder reranking for the shortlist
@@ -23,7 +24,7 @@ any OpenAI-compatible endpoint; OTP primitives orchestrate them.
 
 ```elixir
 def deps do
-  [{:ex_agent, "~> 0.3.0"}]
+  [{:ex_agent, "~> 0.4.0"}]
 end
 ```
 
@@ -44,7 +45,7 @@ response.content   #=> "Elixir is a functional programming language..."
 | | |
 |---|---|
 | [Providers](#providers) · [Roles](#roles) | Configure who answers |
-| [Agents](#agents) · [Tools](#tools) · [Streaming](#streaming) | Run a conversation |
+| [Agents](#agents) · [Tools](#tools) · [Structured output](#structured-output) · [Streaming](#streaming) | Run a conversation |
 | [Attachments](#attachments) · [Uploads](#uploads) | Send files |
 | [Embeddings](#embeddings) · [Jina v5](#jina-v5) · [Reranking](#reranking) | RAG |
 | [Tutorial](#tutorial-build-it-up-step-by-step) | 11 steps, easy to hard, all runnable |
@@ -229,6 +230,7 @@ the tool loop.
   tools: [weather_tool],
   skills: [sql_skill],
   built_in_tools: [:web_search],
+  retain_attachments: false,          # send only the current turn's files
   name: {:global, "support-42"}       # optional GenServer registration
 )
 
@@ -261,7 +263,55 @@ ExAgent.reset(agent)   # forget everything; the system prompt still applies
 ```
 
 Attachments are part of that history too, so a follow-up turn can refer back to a file
-sent earlier without resending it.
+sent earlier without you passing it again.
+
+> #### Attachments accumulate, and are re-sent every turn {: .warning}
+>
+> The provider APIs are stateless, so the whole history goes out on each request, and that
+> includes **every attachment from every earlier turn**, base64-encoded again each time.
+> Two turns with one image each means the second request carries two images.
+>
+> History itself does not duplicate: a file you sent on turn 1 travels once on turn 2, and
+> you do not pass it again. But **passing the same file a second time does duplicate it** -
+> the identical bytes appear twice in one request, because each message owns its own
+> attachment and nothing dedupes by content. Vision input is billed per image, so that is
+> paid for twice, and it consumes two slots against a per-request media cap for one file.
+>
+> This matters because media caps are **per request**, not per turn: Gemini limits videos
+> per request, and a vLLM deployment set with `--limit-mm-per-prompt` will reject the
+> fourth image in a conversation that sent one image per turn. The error names a limit you
+> never knowingly exceeded.
+>
+> Uploading (`upload_file/4` plus `%{file_ref: ref}`) stops the *bytes* being re-sent, since
+> only a reference travels, but the file still counts against a per-request media cap.
+
+`:retain_attachments` turns it off. Only the newest turn's attachments are sent; earlier
+messages keep their text, and history itself is untouched, so `get_context/1` still records
+what was sent.
+
+```elixir
+{:ok, agent} = ExAgent.start_agent(provider: provider, retain_attachments: false)
+
+{:ok, _} = ExAgent.chat(agent, "Describe this", files: [%{path: "one.png"}])
+{:ok, _} = ExAgent.chat(agent, "And this?",     files: [%{path: "two.png"}])
+# the second request carries two.png only, not both
+```
+
+The default is `true` because it is the only correct answer for a conversation that refers
+back to a file. With `false` the model cannot see an earlier image, so "now compare it with
+the first one" stops working: the text of that turn survives, the picture does not. Use it
+when each turn is self-contained, which is the common shape for classification and
+extraction over many files.
+
+Two blunter options still apply, and compose with it:
+
+```elixir
+# cap history, which drops old attachments along with old turns
+{:ok, agent} = ExAgent.start_agent(provider: provider, max_history: 4)
+
+# or reset between documents in a long-lived agent
+ExAgent.reset(agent)
+```
 
 History is **unbounded by default** - every turn resends the whole transcript, so cost
 climbs turn over turn until the model returns `:context_length`. Cap it when a
@@ -351,6 +401,7 @@ response.usage          #=> %{input_tokens: 8, output_tokens: 96, total_tokens: 
 response.finish_reason  #=> :stop | :length | :tool_calls | :content_filter | :error
 response.tool_calls     #=> nil, or [%{"id" => ..., "name" => ..., "args" => %{}}]
 response.thinking       #=> reasoning trace, when the model emitted one
+response.structured     #=> a struct, when :schema was given (see below)
 response.message        #=> the %ExAgent.Message{} appended to history
 ```
 
@@ -379,6 +430,8 @@ end
 | `:rate_limit` | Rate or quota limit hit (429) | ✅ |
 | `:context_length` | Input exceeds the context window | ❌ |
 | `:invalid_request` | Malformed request (other 4xx) | ❌ |
+| `:invalid_response` | The answer does not fit the requested schema | ❌ |
+| `:refusal` | The model declined to answer | ❌ |
 | `:unsupported` | The provider cannot do this at all | ❌ |
 | `:server` | Provider-side failure (5xx, bad shape) | ✅ |
 | `:transport` | Connection-level failure | ✅ |
@@ -437,6 +490,267 @@ ExAgent.chat(agent, "Best restaurants nearby",
 
 ExAgent forwards `temperature` as configured rather than dropping it when a model objects
 - a silently ignored sampling parameter is worse than a 400 naming the field.
+
+## Structured output
+
+Describe the shape you want with an ordinary `Ecto` embedded schema and get a struct
+back. There is no ExAgent schema language and no macro to learn.
+
+```elixir
+defmodule Invoice.Line do
+  use Ecto.Schema
+
+  @primary_key false
+  embedded_schema do
+    field :description, :string
+    field :amount, :float
+  end
+end
+
+defmodule Invoice do
+  use Ecto.Schema
+
+  @primary_key false
+  embedded_schema do
+    field :total, :float
+    field :currency, Ecto.Enum, values: [:EUR, :USD, :GBP]
+    field :issued_on, :date
+    embeds_many :lines, Invoice.Line
+  end
+end
+```
+
+Nothing in those modules mentions ExAgent. Pass one as `:schema`:
+
+```elixir
+{:ok, r} = ExAgent.chat(agent, "Extract the invoice", files: [%{path: "inv.pdf"}],
+             schema: Invoice)
+
+r.structured
+#=> %Invoice{
+#     total: 128.4,
+#     currency: :EUR,
+#     issued_on: ~D[2026-03-14],
+#     lines: [%Invoice.Line{description: "Consulting, March", amount: 128.4}]
+#   }
+
+r.content   #=> the raw JSON string, still there if you want it
+```
+
+`~D[2026-03-14]` and `:EUR` are already cast. Ecto's types do that, so there is no
+parsing step on your side.
+
+`Ecto` is an **optional dependency**, needed only for this:
+
+```elixir
+{:ecto, "~> 3.10"}
+```
+
+Works on `ExAgent.chat/3`, `chat_async/3`, `chat_stream/3` and `chat_with/3`. A provider
+that cannot constrain decoding refuses a `:schema` rather than answering with prose:
+
+```elixir
+ExAgent.chat(agent, "Extract", schema: Invoice)
+#=> {:error, %ExAgent.Error{type: :unsupported}}   # provider has not opted in
+```
+
+### Guiding the model with `:schema_doc`
+
+Field names carry most of the meaning; ambiguity needs prose. `:schema_doc` becomes the
+schema's root description, which both OpenAI and Gemini pass to the model. It is not a
+message, so it never enters conversation history and cannot be trimmed by `:max_history`.
+
+```elixir
+ExAgent.chat(agent, "Extract the invoice",
+  files: [%{path: "inv.pdf"}],
+  schema: Invoice,
+  schema_doc: """
+  issued_on is the date printed on the invoice, not today.
+  total includes tax. One line per billed item.
+  """
+)
+```
+
+If repeating it bothers you, put it on your own module. ExAgent does not need to know:
+
+```elixir
+defmodule Invoice do
+  use Ecto.Schema
+  def doc, do: "issued_on is the date printed on the invoice, not today."
+  # ...
+end
+
+ExAgent.chat(agent, "Extract it", schema: Invoice, schema_doc: Invoice.doc())
+```
+
+### Lists
+
+A JSON Schema root must be an object on OpenAI, so a bare list is wrapped for you and
+unwrapped on the way back. You never see the wrapper.
+
+```elixir
+{:ok, r} = ExAgent.chat(agent, "Extract every invoice in this document",
+             files: [%{path: "invoices.pdf"}],
+             schema: {:list, Invoice},
+             schema_doc: "One entry per invoice, in page order. Skip pages with no invoice.")
+
+r.structured   #=> [%Invoice{...}, %Invoice{...}]
+```
+
+When you want anything *alongside* the list, write a schema whose fields include one. This
+needs no special support:
+
+```elixir
+defmodule InvoiceBatch do
+  use Ecto.Schema
+
+  @primary_key false
+  embedded_schema do
+    embeds_many :invoices, Invoice
+    field :unreadable_pages, {:array, :integer}
+  end
+end
+
+{:ok, r} = ExAgent.chat(agent, "Extract every invoice", files: [...], schema: InvoiceBatch)
+
+r.structured.invoices          #=> [%Invoice{}, %Invoice{}]
+r.structured.unreadable_pages  #=> [7]
+```
+
+That `unreadable_pages` field is worth copying as a habit. It gives the model somewhere to
+put a failure instead of inventing an invoice for a page it could not read.
+
+| Want | Use |
+|---|---|
+| The list is the whole answer | `schema: {:list, Invoice}` |
+| Counts, confidence, or what could not be read | a wrapper schema |
+
+### Every field is required
+
+Ecto has no `required` in the schema, and OpenAI's strict mode demands that every property
+appear in `required`. Those line up, so **every field is required** and there is nothing to
+reconcile. Optional fields cannot be expressed; model the absence explicitly instead:
+
+```elixir
+field :po_number, :string   # the model must return something, even ""
+```
+
+An empty string stays an empty string. Ecto's default is to cast `""` to `nil`, which would
+erase the difference between a model that found nothing and a field it never returned, and
+the second is already an error.
+
+### Primary keys are never sent
+
+`embedded_schema` carries a `binary_id` primary key unless you write `@primary_key false`,
+and that key is always excluded from the schema the model sees. A primary key is identity
+your application assigns, not a fact to extract: asking a model to invent a UUID is
+meaningless, and asking for an integer id invites a hallucinated foreign key that looks
+real.
+
+So a schema you already have drops in unchanged:
+
+```elixir
+defmodule Supplier do
+  use Ecto.Schema              # keeps Ecto's default binary_id primary key
+
+  embedded_schema do
+    field :name, :string
+  end
+end
+
+{:ok, r} = ExAgent.chat(agent, "Who issued this invoice?", files: [%{path: "inv.pdf"}],
+             schema: Supplier)
+
+r.structured   #=> %Supplier{id: nil, name: "ACME Consulting Ltd"}
+
+%{r.structured | id: Ecto.UUID.generate()}   # or let Repo.insert autogenerate
+```
+
+`:id` comes back `nil` because nothing filled it. `@primary_key false` is still what to
+write for a pure extraction schema, as `Invoice` does above; it is simply not required. An
+identifier that appears *in the document* was never a primary key:
+
+```elixir
+field :invoice_number, :string   # extracted
+```
+
+### Errors
+
+```elixir
+# the model declined
+{:error, %ExAgent.Error{type: :refusal}}
+
+# the answer does not fit the schema
+{:error, %ExAgent.Error{type: :invalid_response,
+  message: "model returned JSON that does not fit: currency is invalid"}}
+
+# the schema cannot be expressed for this provider
+{:error, %ExAgent.Error{type: :invalid_request}}
+```
+
+A missing field is an error rather than a `nil`, because an endpoint that ignored the schema
+would otherwise hand back a half-built struct with no signal. Neither error is retryable:
+under constrained decoding a mismatch means the endpoint is not honouring the schema.
+
+### Streaming
+
+A schema and a stream work together, with the JSON decoded once the stream finishes. There
+are no partial objects mid-stream.
+
+```elixir
+{:ok, r} =
+  agent
+  |> ExAgent.chat_stream("Extract the invoice", files: [%{path: "inv.pdf"}], schema: Invoice)
+  |> ExAgent.collect(schema: Invoice)
+
+r.structured   #=> %Invoice{}
+```
+
+The schema is given **twice** on purpose. A stream is a plain enumerable and carries no
+memory of how it was built, so `chat_stream/3` needs it to constrain the model and
+`collect/2` needs it to cast. Passing it to only one of them is legal and does half the job.
+
+### Typed tool parameters
+
+The same schema describes a tool's arguments, and your tool function receives a struct
+instead of a string-keyed map.
+
+```elixir
+defmodule OrderQuery do
+  use Ecto.Schema
+
+  @primary_key false
+  embedded_schema do
+    field :order_id, :string
+  end
+end
+
+{:ok, tool} =
+  ExAgent.Tool.new(
+    name: "order_status",
+    description: "Look up the delivery status of an order by its ID",
+    parameters: OrderQuery,
+    function: fn %OrderQuery{order_id: id} -> Repo.get(Order, id) end
+  )
+```
+
+A typo in the tool body becomes a compile-time warning rather than a `KeyError` inside the
+agent loop. `parameters:` still accepts a raw JSON Schema map, so nothing breaks.
+
+Arguments the model gets wrong never reach your function. The cast failure is fed back as a
+tool error, which is what lets the model correct itself and try again.
+
+Schemas and tools combine freely: the schema rides on every turn, and the model calls tools
+until it has what it needs, then answers in the requested shape.
+
+```elixir
+{:ok, agent} = ExAgent.start_agent(provider: provider, tools: [rate_tool])
+
+{:ok, r} = ExAgent.chat(agent, "Look up the USD rate, then extract this invoice:\n\n" <> text,
+             schema: Invoice)
+
+r.structured.currency   #=> :USD
+```
 
 ## Streaming
 
@@ -518,6 +832,14 @@ ExAgent.chat(agent, "Now focus on the second document")
 Inferred from the extension for `:path` and `:url` (query strings ignored) and from magic
 bytes for `:data`. **ExAgent never guesses** - when inference fails you get
 `{:error, %ExAgent.Error{type: :invalid_request}}` naming `:mime_type`.
+
+The two sources are not interchangeable, and the split is deliberate. For a path or a URL
+the **extension is taken at its word**: the content is not sniffed, so a WebP file saved as
+`photo.png` is declared `image/png`. Both OpenAI and Gemini sniff the bytes themselves and
+handle that correctly, but if you need the declared type to be right, pass `:mime_type`.
+Sniffing paths instead would break the opposite case, where an extension carries
+information the bytes do not: `.m4a` and `.mp4` share the same container signature, and
+only the filename says which one is audio.
 
 ```elixir
 # inferred: image/png (the query string is ignored)
@@ -1567,9 +1889,10 @@ provider = %ExAgent.Providers.OpenAI{
 
 ## Custom providers
 
-Implement `ExAgent.Provider`. Only `chat/3` is required; `upload/4`, `stream/3`,
-`embed/3`, and `supported_modalities/1` are optional. `ExAgent.Error.from_result/2` does
-the status classification and keeps the original body in `:raw`.
+Implement `ExAgent.Provider`. Only `chat/3` is required. Optional:
+`supported_modalities/1`, `stream/3`, `upload/4`, `embed/3`, `embedding_tasks/1`,
+`rerank/4`, and `supports_structured_output?/1`. `ExAgent.Error.from_result/2` does the
+status classification and keeps the original body in `:raw`.
 
 ```elixir
 defmodule MyApp.Providers.Anthropic do
@@ -1620,6 +1943,48 @@ provider = MyApp.Providers.Anthropic.new(api_key: "sk-ant-...")
 `{:error, %ExAgent.Error{}}`. Each call is `%{"name" => name, "args" => args}`, plus
 `"id"` where the provider issues one - models request several tools per turn, so it is a
 list. `{:tool_call, name, args}` is still accepted for a single call.
+
+### Opting into structured output
+
+Declaring `supports_structured_output?/1` is a promise that your `chat/3` both *constrains*
+the model to the schema and *casts* the answer. Omitting the callback means no, and a
+`:schema` is then refused rather than silently ignored, so there is no half-working state.
+
+Use `ExAgent.Schema` for both halves:
+
+```elixir
+@impl true
+def supports_structured_output?(_provider), do: true
+
+@impl true
+def chat(provider, messages, opts) do
+  with {:ok, json_schema} <- schema_or_nil(opts),
+       {:ok, body} <- request(provider, messages, json_schema),
+       {:ok, response} <- parse(body) do
+    case opts[:schema] do
+      nil -> {:ok, response}
+      schema -> cast_into(response, schema)
+    end
+  end
+end
+
+defp schema_or_nil(opts) do
+  case opts[:schema] do
+    nil -> {:ok, nil}
+    schema -> ExAgent.Schema.to_json_schema(schema, description: opts[:schema_doc])
+  end
+end
+
+defp cast_into(response, schema) do
+  with {:ok, decoded} <- Jason.decode(response.content),
+       {:ok, structured} <- ExAgent.Schema.cast(schema, decoded) do
+    {:ok, %{response | structured: structured}}
+  end
+end
+```
+
+Pass `dialect: :gemini` to `to_json_schema/2` if your endpoint rejects
+`additionalProperties`, as Gemini's does.
 
 **Each provider owns its own rules.** The dispatcher stays generic - it reads
 `supported_modalities/1` rather than knowing which vendor accepts video, and the modality

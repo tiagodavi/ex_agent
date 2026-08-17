@@ -1,3 +1,90 @@
+## v0.4.0 (2026-08-17)
+
+### Added
+
+- **Structured output.** Describe the shape you want with an ordinary `Ecto` embedded schema
+  and get a struct back, cast and typed:
+
+      {:ok, response} = ExAgent.chat(agent, "Extract the invoice",
+                          files: [%{path: "inv.pdf"}], schema: Invoice)
+
+      response.structured   #=> %Invoice{total: 128.4, currency: :EUR, issued_on: ~D[2026-03-14]}
+
+  There is no ExAgent schema language and no macro: `use Ecto.Schema` is the whole contract.
+  `:schema` works on `ExAgent.chat/3`, `chat_async/3`, `chat_stream/3` and `chat_with/3`,
+  and `schema: {:list, Invoice}` returns a list. `:schema_doc` adds prose guidance, which
+  becomes the schema root's description rather than a message, so it never enters history.
+
+  Supported on `Providers.OpenAI` (`response_format` with `strict: true`),
+  `Providers.Gemini` (`responseSchema` plus `responseMimeType`), and
+  `Providers.OpenAICompatible`. Backed by a new optional
+  `c:ExAgent.Provider.supports_structured_output?/1`: a provider that has not opted in
+  refuses a `:schema` rather than quietly answering with prose.
+
+  `Ecto` is an **optional** dependency, needed only for this.
+
+- **`ExAgent.Schema`**, the reflection layer, usable on its own: `to_json_schema/2` and
+  `cast/2`. Covers strings, integers, floats, decimals, booleans, dates, times, all four
+  datetime variants, `Ecto.UUID`, `{:array, inner}`, `Ecto.Enum`, `embeds_one` and
+  `embeds_many`, recursively.
+
+- **`%ExAgent.Response{structured: ...}`** holds the cast struct or list, `nil` when no
+  schema was given. `:content` still carries the raw JSON, so nothing is lost.
+
+- **Typed tool parameters.** `:parameters` now accepts an `Ecto` schema module alongside a
+  raw JSON Schema map, and the tool function receives a struct:
+
+      ExAgent.Tool.new(
+        name: "order_status",
+        description: "Look up the delivery status of an order",
+        parameters: OrderQuery,
+        function: fn %OrderQuery{order_id: id} -> Repo.get(Order, id) end
+      )
+
+  A typo in the function body becomes a compile-time warning instead of a `KeyError` inside
+  the tool loop. Arguments the model gets wrong are fed back to it as a tool error, so it can
+  correct itself, and your function never runs on bad input.
+
+- **`:retain_attachments` on `start_agent/1`.** Provider APIs are stateless, so the whole
+  history goes out on every request and **every attachment from every earlier turn goes with
+  it**, base64-encoded again each time. Media caps are per *request*, so an agent sending one
+  image per turn eventually trips a limit nobody knowingly exceeded, and passing the same
+  file twice puts the identical bytes in one request twice.
+
+  `retain_attachments: false` sends only the newest turn's attachments. History is untouched,
+  so `get_context/1` still records what was sent. The default stays `true`, because it is the
+  only correct answer for a conversation that refers back to a file.
+
+- **`ExAgent.collect/2`** takes `:schema` to cast a finished stream. It has to be given to
+  both `chat_stream/3` and `collect/2`, because a stream is a plain enumerable and carries no
+  memory of how it was built. There are no partial objects mid-stream.
+
+- **`ExAgent.Error` types `:invalid_response` and `:refusal`.** Neither is retryable:
+  under constrained decoding a mismatch means the endpoint is not honouring the schema, and
+  resending a request the model declined will not change its mind.
+
+### Changed
+
+- **A model refusal is no longer classified `:server`.** An OpenAI message carrying
+  `refusal` produced `{:error, %ExAgent.Error{type: :server, retryable?: true}}`, so a retry
+  wrapper would resend a request the model had explicitly declined. It is now
+  `{:error, %ExAgent.Error{type: :refusal, retryable?: false}}`.
+
+  **This is visible to anyone matching on `%ExAgent.Error{type: :server}`.** A message with
+  neither content, tool calls, nor a refusal is still `:server`.
+
+### Security
+
+- **`:req` floor raised from `~> 0.5` to `~> 0.7`.** Every version below 0.6.1 carries
+  EEF-CVE-2026-49755 (HIGH), an unbounded-decompression denial of service on auto-decoded
+  response bodies, and there is no 0.5.x patch. The 0.5 series also carries
+  EEF-CVE-2026-49756 (LOW), multipart header injection through unescaped filenames, which
+  reaches `ExAgent.upload_file/4`.
+
+  This raises the requirement for consumers. The full live provider suite was run against
+  both versions to confirm the upgrade changes no behaviour: 0.7.2 produced *fewer* failures
+  than 0.5.17, and the remainder were provider-side rate limits in both.
+
 ## v0.3.0 (2026-08-11)
 
 ### Changed

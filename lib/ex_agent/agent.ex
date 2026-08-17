@@ -19,6 +19,8 @@ defmodule ExAgent.Agent do
 
   - `:max_tool_iterations` - ceiling on tool round-trips (default 10)
   - `:max_history` - keep at most this many messages; unbounded when unset
+  - `:retain_attachments` - send attachments from earlier turns again on every
+    request (default `true`)
   """
 
   use GenServer
@@ -34,6 +36,7 @@ defmodule ExAgent.Agent do
           skills: [Skill.t()],
           max_tool_iterations: pos_integer(),
           max_history: pos_integer(),
+          retain_attachments: boolean(),
           name: GenServer.name()
         ]
 
@@ -47,6 +50,7 @@ defmodule ExAgent.Agent do
           built_in_tools: [atom()],
           max_tool_iterations: pos_integer(),
           max_history: pos_integer() | nil,
+          retain_attachments: boolean(),
           base_system_prompt: String.t() | nil,
           status: :idle | :processing | :handed_off,
           reply_to: GenServer.from() | nil,
@@ -70,12 +74,29 @@ defmodule ExAgent.Agent do
   def start_link(opts) do
     opts = opts |> resolve_role() |> validate_positive!(:max_tool_iterations)
     opts = validate_positive!(opts, :max_history)
+    opts = validate_boolean!(opts, :retain_attachments)
     name = opts[:name]
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   # A bad ceiling used to be accepted here and then crash the agent at the end of
   # its first turn, which points at the wrong line entirely.
+  # Only `true`/`false` mean anything here, and `nil` is not "use the default":
+  # omitting the key is. Accepting nil would make a typo'd value look deliberate.
+  @spec validate_boolean!(agent_opts(), atom()) :: agent_opts()
+  defp validate_boolean!(opts, key) do
+    case Keyword.fetch(opts, key) do
+      :error ->
+        opts
+
+      {:ok, value} when is_boolean(value) ->
+        opts
+
+      {:ok, value} ->
+        raise ArgumentError, "#{inspect(key)} must be true or false, got #{inspect(value)}"
+    end
+  end
+
   @spec validate_positive!(agent_opts(), atom()) :: agent_opts()
   defp validate_positive!(opts, key) do
     case Keyword.get(opts, key) do
@@ -235,6 +256,7 @@ defmodule ExAgent.Agent do
       built_in_tools: opts[:built_in_tools] || [],
       max_tool_iterations: opts[:max_tool_iterations] || @default_max_tool_iterations,
       max_history: opts[:max_history],
+      retain_attachments: Keyword.get(opts, :retain_attachments, true),
       # Remembered so a skill's prompt can be undone; a skill that activates once
       # must not overwrite the agent's own persona for the rest of its life.
       base_system_prompt: Map.get(Keyword.fetch!(opts, :provider), :system_prompt),
@@ -308,7 +330,7 @@ defmodule ExAgent.Agent do
         effective_tools = get_effective_tools(state)
         provider = with_tools(state.provider, effective_tools)
 
-        {:reply, {:ok, provider, state.context.messages, effective_tools, stream_opts}, state}
+        {:reply, {:ok, provider, outbound_messages(state), effective_tools, stream_opts}, state}
     end
   end
 
@@ -396,6 +418,41 @@ defmodule ExAgent.Agent do
   end
 
   # Bounded history is opt-in: dropping what a user said is the caller's call.
+  # The messages actually sent, which is not the same thing as the messages kept.
+  #
+  # Provider APIs are stateless, so the whole history goes out every turn and
+  # every earlier attachment goes with it, re-encoded. Media caps are per
+  # *request*, so an agent sending one image per turn hits a per-request limit it
+  # never knowingly exceeded. With `retain_attachments: false` only the newest
+  # user message keeps its attachments; history itself is untouched, so
+  # `get_context/1` still records what was sent.
+  @spec outbound_messages(state()) :: [Message.t()]
+  defp outbound_messages(%{retain_attachments: true, context: context}), do: context.messages
+
+  defp outbound_messages(%{context: context}) do
+    messages = context.messages
+    keep = last_attachment_index(messages)
+
+    messages
+    |> Enum.with_index()
+    |> Enum.map(fn
+      {message, ^keep} -> message
+      {%Message{attachments: []} = message, _index} -> message
+      {message, _index} -> %{message | attachments: []}
+    end)
+  end
+
+  # The current turn is the newest user message; anything before it is history.
+  @spec last_attachment_index([Message.t()]) :: integer()
+  defp last_attachment_index(messages) do
+    messages
+    |> Enum.with_index()
+    |> Enum.reduce(-1, fn
+      {%Message{role: :user}, index}, _acc -> index
+      {_message, _index}, acc -> acc
+    end)
+  end
+
   @spec trim(state(), Context.t()) :: Context.t()
   defp trim(%{max_history: nil}, context), do: context
   defp trim(%{max_history: max}, context), do: Context.trim(context, max)
@@ -415,7 +472,7 @@ defmodule ExAgent.Agent do
 
   defp run_tool_loop(state, opts, iteration) do
     effective_tools = get_effective_tools(state)
-    messages = state.context.messages
+    messages = outbound_messages(state)
     provider = with_tools(state.provider, effective_tools)
 
     case Provider.chat(provider, messages, opts) do
@@ -683,9 +740,13 @@ defmodule ExAgent.Agent do
       nil ->
         {:error, "unknown tool: #{name}"}
 
-      %Tool{function: fun} ->
+      %Tool{} = tool ->
         ExAgent.Telemetry.span([:tool], %{tool: name}, fn ->
-          normalize_tool_result(fun.(args))
+          case Tool.cast_args(tool, args) do
+            {:ok, cast} -> normalize_tool_result(tool.function.(cast))
+            # Feedback, not a crash: the model can fix its own arguments.
+            {:error, message} -> {:error, message}
+          end
         end)
     end
   end

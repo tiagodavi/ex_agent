@@ -25,6 +25,7 @@ defmodule ExAgent.Services.OpenAIDialect do
           tool_choice: String.t() | map(),
           temperature: float() | nil,
           max_tokens: pos_integer() | nil,
+          response_format: map() | nil,
           attachment_formatter: attachment_formatter() | nil
         ]
 
@@ -36,6 +37,7 @@ defmodule ExAgent.Services.OpenAIDialect do
     %{"model" => model, "messages" => build_messages(messages, opts[:system_prompt], formatter)}
     |> maybe_put("temperature", opts[:temperature])
     |> maybe_put("max_tokens", opts[:max_tokens])
+    |> maybe_put("response_format", opts[:response_format])
     |> maybe_add_tools(opts[:tools] || [], opts[:tool_choice])
   end
 
@@ -74,10 +76,16 @@ defmodule ExAgent.Services.OpenAIDialect do
 
   defp tool_calls(_message), do: []
 
-  # A message with neither content nor tool calls - a bare refusal, say - is an
-  # unparseable shape, not a crash.
+  # Structured outputs answer with `refusal` in place of `content` when the model
+  # declines. Casting that string would fail with a confusing JSON error, so it is
+  # classified as what it is.
   @spec text_response(map(), map(), map(), module()) ::
           {:ok, Response.t()} | {:error, Error.t()}
+  defp text_response(%{"refusal" => refusal}, _choice, _body, provider)
+       when is_binary(refusal) and refusal != "" do
+    {:error, Error.new(:refusal, refusal, provider)}
+  end
+
   defp text_response(%{"content" => content} = message, choice, body, _provider)
        when is_binary(content) or is_nil(content) do
     assistant = %Message{role: :assistant, content: content || "", tool_calls: nil}

@@ -21,7 +21,7 @@ defmodule ExAgent.CollectTest do
       api_key: "sk-test",
       model: "gpt-4o",
       base_url: "http://x",
-      req: Req.new(adapter: FakeSSE.adapter(parts, opts))
+      req: FakeSSE.req(parts, opts)
     }
   end
 
