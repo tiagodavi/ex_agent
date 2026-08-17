@@ -91,9 +91,15 @@ defmodule ExAgent.Services.OpenAICompatibleService do
 
     opts = prepare_opts(provider, opts)
 
+    format =
+      case response_format(opts) do
+        {:ok, format} -> format
+        {:error, error} -> raise error
+      end
+
     body =
       provider
-      |> build_chat_body(messages, opts)
+      |> build_chat_body(messages, opts, format)
       |> Map.put("stream", true)
       |> Map.put("stream_options", %{"include_usage" => true})
 
@@ -106,7 +112,7 @@ defmodule ExAgent.Services.OpenAICompatibleService do
   end
 
   @spec build_chat_body(OpenAICompatible.t(), [Message.t()], keyword(), map() | nil) :: map()
-  defp build_chat_body(provider, messages, opts, response_format \\ nil) do
+  defp build_chat_body(provider, messages, opts, response_format) do
     OpenAIDialect.build_body(provider.model, messages,
       system_prompt: provider.system_prompt,
       tools: provider.tools,

@@ -45,6 +45,16 @@
   the tool loop. Arguments the model gets wrong are fed back to it as a tool error, so it can
   correct itself, and your function never runs on bad input.
 
+- **`:retain_attachments` on `start_agent/1`.** Provider APIs are stateless, so the whole
+  history goes out on every request and **every attachment from every earlier turn goes with
+  it**, base64-encoded again each time. Media caps are per *request*, so an agent sending one
+  image per turn eventually trips a limit nobody knowingly exceeded, and passing the same
+  file twice puts the identical bytes in one request twice.
+
+  `retain_attachments: false` sends only the newest turn's attachments. History is untouched,
+  so `get_context/1` still records what was sent. The default stays `true`, because it is the
+  only correct answer for a conversation that refers back to a file.
+
 - **`ExAgent.collect/2`** takes `:schema` to cast a finished stream. It has to be given to
   both `chat_stream/3` and `collect/2`, because a stream is a plain enumerable and carries no
   memory of how it was built. There are no partial objects mid-stream.

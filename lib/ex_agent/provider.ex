@@ -235,7 +235,10 @@ defmodule ExAgent.Provider do
     end
 
     if function_exported?(mod, :stream, 3) do
-      mod.stream(provider, messages, opts)
+      case check_structured_output(provider, opts) do
+        {:error, error} -> raise error
+        :ok -> mod.stream(provider, messages, opts)
+      end
     else
       raise ExAgent.Error.new(:unsupported, "#{inspect(mod)} does not support streaming", mod)
     end

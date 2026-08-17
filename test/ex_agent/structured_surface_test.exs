@@ -232,6 +232,35 @@ defmodule ExAgent.StructuredSurfaceTest do
     end
   end
 
+  describe "OpenAICompatible streaming" do
+    test "given :schema, then the streamed request is constrained too" do
+      test_pid = self()
+
+      plug = fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request, Jason.decode!(body)})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("text/event-stream")
+        |> Plug.Conn.send_resp(200, "data: [DONE]\n\n")
+      end
+
+      provider = %ExAgent.Providers.OpenAICompatible{
+        model: "Qwen/Qwen3-VL",
+        base_url: "http://x",
+        modalities: [:text],
+        req: Req.new(plug: plug)
+      }
+
+      {:ok, agent} = ExAgent.start_agent(provider: provider)
+      agent |> ExAgent.chat_stream("Extract", schema: Invoice) |> Enum.to_list()
+
+      assert_received {:request, body}
+      assert body["stream"] == true
+      assert body["response_format"]["json_schema"]["name"] == "Invoice"
+    end
+  end
+
   describe "failures" do
     test "given a provider without structured output, then the agent reports it" do
       {:ok, agent} = ExAgent.start_agent(provider: %ExAgent.Test.MinimalProvider{})

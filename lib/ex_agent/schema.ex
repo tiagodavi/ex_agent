@@ -135,6 +135,27 @@ defmodule ExAgent.Schema do
     end
   end
 
+  # `:schema` is deliberately loosely typed at the call site because this module
+  # owns the vocabulary, which means the wrong shape arrives here rather than
+  # being caught by NimbleOptions. A raw JSON Schema map and `[Invoice]` are the
+  # two likely mistakes, so both are named.
+  defp build(other, _dialect) do
+    {:error,
+     invalid_request(
+       ":schema must be an Ecto schema module or {:list, module}, got #{inspect(other)}" <>
+         list_hint(other)
+     )}
+  end
+
+  @spec list_hint(term()) :: String.t()
+  defp list_hint([module]) when is_atom(module),
+    do: "; for a list of results use {:list, #{inspect(module)}}"
+
+  defp list_hint(map) when is_map(map),
+    do: "; a raw JSON Schema map is not accepted here, only for a tool's :parameters"
+
+  defp list_hint(_other), do: ""
+
   @spec object(map(), [String.t()], dialect()) :: map()
   defp object(properties, required, dialect) do
     base = %{"type" => "object", "properties" => properties, "required" => required}

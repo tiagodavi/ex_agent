@@ -303,5 +303,37 @@ defmodule ExAgent.StructuredOutputTest do
       assert {:error, %Error{type: :unsupported}} =
                Provider.chat(provider, [user_msg()], schema: Invoice)
     end
+
+    # A lazy enumerable has nowhere to carry an error tuple, so `stream/3` raises,
+    # matching how it already reports an unsupported modality.
+    test "given a schema on a streaming provider without structured output, then it raises" do
+      provider = %ExAgent.Test.StreamOnlyProvider{}
+
+      assert_raise Error, ~r/does not support structured output/, fn ->
+        Provider.stream(provider, [user_msg()], schema: Invoice)
+      end
+
+      assert [%ExAgent.Chunk{type: :done}] = Provider.stream(provider, [user_msg()])
+    end
+
+    # `:schema` is typed loosely because `ExAgent.Schema` owns the vocabulary, so
+    # the wrong shape has to come back as an error rather than a FunctionClauseError
+    # from inside the agent's task.
+    for {label, bad} <- [
+          {"a raw JSON Schema map", %{"type" => "object"}},
+          {"a list", [ExAgent.Test.Schemas.Invoice]},
+          {"a string", "Invoice"},
+          {"a number", 123},
+          {"a list tuple wrapping a non-module", {:list, "Invoice"}}
+        ] do
+      test "given #{label} as :schema, then it is refused rather than raising" do
+        provider = openai_style(OpenAI, @invoice_json)
+
+        assert {:error, %Error{type: :invalid_request}} =
+                 Provider.chat(provider, [user_msg()], schema: unquote(Macro.escape(bad)))
+
+        refute_received {:request, _body}
+      end
+    end
   end
 end

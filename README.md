@@ -230,6 +230,7 @@ the tool loop.
   tools: [weather_tool],
   skills: [sql_skill],
   built_in_tools: [:web_search],
+  retain_attachments: false,          # send only the current turn's files
   name: {:global, "support-42"}       # optional GenServer registration
 )
 
@@ -262,7 +263,55 @@ ExAgent.reset(agent)   # forget everything; the system prompt still applies
 ```
 
 Attachments are part of that history too, so a follow-up turn can refer back to a file
-sent earlier without resending it.
+sent earlier without you passing it again.
+
+> #### Attachments accumulate, and are re-sent every turn {: .warning}
+>
+> The provider APIs are stateless, so the whole history goes out on each request, and that
+> includes **every attachment from every earlier turn**, base64-encoded again each time.
+> Two turns with one image each means the second request carries two images.
+>
+> History itself does not duplicate: a file you sent on turn 1 travels once on turn 2, and
+> you do not pass it again. But **passing the same file a second time does duplicate it** -
+> the identical bytes appear twice in one request, because each message owns its own
+> attachment and nothing dedupes by content. Vision input is billed per image, so that is
+> paid for twice, and it consumes two slots against a per-request media cap for one file.
+>
+> This matters because media caps are **per request**, not per turn: Gemini limits videos
+> per request, and a vLLM deployment set with `--limit-mm-per-prompt` will reject the
+> fourth image in a conversation that sent one image per turn. The error names a limit you
+> never knowingly exceeded.
+>
+> Uploading (`upload_file/4` plus `%{file_ref: ref}`) stops the *bytes* being re-sent, since
+> only a reference travels, but the file still counts against a per-request media cap.
+
+`:retain_attachments` turns it off. Only the newest turn's attachments are sent; earlier
+messages keep their text, and history itself is untouched, so `get_context/1` still records
+what was sent.
+
+```elixir
+{:ok, agent} = ExAgent.start_agent(provider: provider, retain_attachments: false)
+
+{:ok, _} = ExAgent.chat(agent, "Describe this", files: [%{path: "one.png"}])
+{:ok, _} = ExAgent.chat(agent, "And this?",     files: [%{path: "two.png"}])
+# the second request carries two.png only, not both
+```
+
+The default is `true` because it is the only correct answer for a conversation that refers
+back to a file. With `false` the model cannot see an earlier image, so "now compare it with
+the first one" stops working: the text of that turn survives, the picture does not. Use it
+when each turn is self-contained, which is the common shape for classification and
+extraction over many files.
+
+Two blunter options still apply, and compose with it:
+
+```elixir
+# cap history, which drops old attachments along with old turns
+{:ok, agent} = ExAgent.start_agent(provider: provider, max_history: 4)
+
+# or reset between documents in a long-lived agent
+ExAgent.reset(agent)
+```
 
 History is **unbounded by default** - every turn resends the whole transcript, so cost
 climbs turn over turn until the model returns `:context_length`. Cap it when a
@@ -783,6 +832,14 @@ ExAgent.chat(agent, "Now focus on the second document")
 Inferred from the extension for `:path` and `:url` (query strings ignored) and from magic
 bytes for `:data`. **ExAgent never guesses** - when inference fails you get
 `{:error, %ExAgent.Error{type: :invalid_request}}` naming `:mime_type`.
+
+The two sources are not interchangeable, and the split is deliberate. For a path or a URL
+the **extension is taken at its word**: the content is not sniffed, so a WebP file saved as
+`photo.png` is declared `image/png`. Both OpenAI and Gemini sniff the bytes themselves and
+handle that correctly, but if you need the declared type to be right, pass `:mime_type`.
+Sniffing paths instead would break the opposite case, where an extension carries
+information the bytes do not: `.m4a` and `.mp4` share the same container signature, and
+only the filename says which one is audio.
 
 ```elixir
 # inferred: image/png (the query string is ignored)
@@ -1832,9 +1889,10 @@ provider = %ExAgent.Providers.OpenAI{
 
 ## Custom providers
 
-Implement `ExAgent.Provider`. Only `chat/3` is required; `upload/4`, `stream/3`,
-`embed/3`, and `supported_modalities/1` are optional. `ExAgent.Error.from_result/2` does
-the status classification and keeps the original body in `:raw`.
+Implement `ExAgent.Provider`. Only `chat/3` is required. Optional:
+`supported_modalities/1`, `stream/3`, `upload/4`, `embed/3`, `embedding_tasks/1`,
+`rerank/4`, and `supports_structured_output?/1`. `ExAgent.Error.from_result/2` does the
+status classification and keeps the original body in `:raw`.
 
 ```elixir
 defmodule MyApp.Providers.Anthropic do
@@ -1885,6 +1943,48 @@ provider = MyApp.Providers.Anthropic.new(api_key: "sk-ant-...")
 `{:error, %ExAgent.Error{}}`. Each call is `%{"name" => name, "args" => args}`, plus
 `"id"` where the provider issues one - models request several tools per turn, so it is a
 list. `{:tool_call, name, args}` is still accepted for a single call.
+
+### Opting into structured output
+
+Declaring `supports_structured_output?/1` is a promise that your `chat/3` both *constrains*
+the model to the schema and *casts* the answer. Omitting the callback means no, and a
+`:schema` is then refused rather than silently ignored, so there is no half-working state.
+
+Use `ExAgent.Schema` for both halves:
+
+```elixir
+@impl true
+def supports_structured_output?(_provider), do: true
+
+@impl true
+def chat(provider, messages, opts) do
+  with {:ok, json_schema} <- schema_or_nil(opts),
+       {:ok, body} <- request(provider, messages, json_schema),
+       {:ok, response} <- parse(body) do
+    case opts[:schema] do
+      nil -> {:ok, response}
+      schema -> cast_into(response, schema)
+    end
+  end
+end
+
+defp schema_or_nil(opts) do
+  case opts[:schema] do
+    nil -> {:ok, nil}
+    schema -> ExAgent.Schema.to_json_schema(schema, description: opts[:schema_doc])
+  end
+end
+
+defp cast_into(response, schema) do
+  with {:ok, decoded} <- Jason.decode(response.content),
+       {:ok, structured} <- ExAgent.Schema.cast(schema, decoded) do
+    {:ok, %{response | structured: structured}}
+  end
+end
+```
+
+Pass `dialect: :gemini` to `to_json_schema/2` if your endpoint rejects
+`additionalProperties`, as Gemini's does.
 
 **Each provider owns its own rules.** The dispatcher stays generic - it reads
 `supported_modalities/1` rather than knowing which vendor accepts video, and the modality
