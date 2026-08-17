@@ -9,6 +9,7 @@ any OpenAI-compatible endpoint; OTP primitives orchestrate them.
 - **Config-driven roles** - name a purpose (`:vision`, `:embed`), not a vendor
 - **Structured streaming** - text, reasoning, tool-call deltas, usage as typed chunks
 - **Automatic tool execution** - define a tool once; the agent loops until done
+- **Structured output** - describe the shape with an `Ecto` schema, get a struct back
 - **Multimodal** - images, PDFs, video, audio from a path, bytes, a URL, or an upload
 - **Embeddings and reranking for RAG** - each provider's own task vocabulary, provenance on
   every result, cross-encoder reranking for the shortlist
@@ -23,7 +24,7 @@ any OpenAI-compatible endpoint; OTP primitives orchestrate them.
 
 ```elixir
 def deps do
-  [{:ex_agent, "~> 0.3.0"}]
+  [{:ex_agent, "~> 0.4.0"}]
 end
 ```
 
@@ -44,7 +45,7 @@ response.content   #=> "Elixir is a functional programming language..."
 | | |
 |---|---|
 | [Providers](#providers) · [Roles](#roles) | Configure who answers |
-| [Agents](#agents) · [Tools](#tools) · [Streaming](#streaming) | Run a conversation |
+| [Agents](#agents) · [Tools](#tools) · [Structured output](#structured-output) · [Streaming](#streaming) | Run a conversation |
 | [Attachments](#attachments) · [Uploads](#uploads) | Send files |
 | [Embeddings](#embeddings) · [Jina v5](#jina-v5) · [Reranking](#reranking) | RAG |
 | [Tutorial](#tutorial-build-it-up-step-by-step) | 11 steps, easy to hard, all runnable |
@@ -351,6 +352,7 @@ response.usage          #=> %{input_tokens: 8, output_tokens: 96, total_tokens: 
 response.finish_reason  #=> :stop | :length | :tool_calls | :content_filter | :error
 response.tool_calls     #=> nil, or [%{"id" => ..., "name" => ..., "args" => %{}}]
 response.thinking       #=> reasoning trace, when the model emitted one
+response.structured     #=> a struct, when :schema was given (see below)
 response.message        #=> the %ExAgent.Message{} appended to history
 ```
 
@@ -379,6 +381,8 @@ end
 | `:rate_limit` | Rate or quota limit hit (429) | ✅ |
 | `:context_length` | Input exceeds the context window | ❌ |
 | `:invalid_request` | Malformed request (other 4xx) | ❌ |
+| `:invalid_response` | The answer does not fit the requested schema | ❌ |
+| `:refusal` | The model declined to answer | ❌ |
 | `:unsupported` | The provider cannot do this at all | ❌ |
 | `:server` | Provider-side failure (5xx, bad shape) | ✅ |
 | `:transport` | Connection-level failure | ✅ |
@@ -437,6 +441,267 @@ ExAgent.chat(agent, "Best restaurants nearby",
 
 ExAgent forwards `temperature` as configured rather than dropping it when a model objects
 - a silently ignored sampling parameter is worse than a 400 naming the field.
+
+## Structured output
+
+Describe the shape you want with an ordinary `Ecto` embedded schema and get a struct
+back. There is no ExAgent schema language and no macro to learn.
+
+```elixir
+defmodule Invoice.Line do
+  use Ecto.Schema
+
+  @primary_key false
+  embedded_schema do
+    field :description, :string
+    field :amount, :float
+  end
+end
+
+defmodule Invoice do
+  use Ecto.Schema
+
+  @primary_key false
+  embedded_schema do
+    field :total, :float
+    field :currency, Ecto.Enum, values: [:EUR, :USD, :GBP]
+    field :issued_on, :date
+    embeds_many :lines, Invoice.Line
+  end
+end
+```
+
+Nothing in those modules mentions ExAgent. Pass one as `:schema`:
+
+```elixir
+{:ok, r} = ExAgent.chat(agent, "Extract the invoice", files: [%{path: "inv.pdf"}],
+             schema: Invoice)
+
+r.structured
+#=> %Invoice{
+#     total: 128.4,
+#     currency: :EUR,
+#     issued_on: ~D[2026-03-14],
+#     lines: [%Invoice.Line{description: "Consulting, March", amount: 128.4}]
+#   }
+
+r.content   #=> the raw JSON string, still there if you want it
+```
+
+`~D[2026-03-14]` and `:EUR` are already cast. Ecto's types do that, so there is no
+parsing step on your side.
+
+`Ecto` is an **optional dependency**, needed only for this:
+
+```elixir
+{:ecto, "~> 3.10"}
+```
+
+Works on `ExAgent.chat/3`, `chat_async/3`, `chat_stream/3` and `chat_with/3`. A provider
+that cannot constrain decoding refuses a `:schema` rather than answering with prose:
+
+```elixir
+ExAgent.chat(agent, "Extract", schema: Invoice)
+#=> {:error, %ExAgent.Error{type: :unsupported}}   # provider has not opted in
+```
+
+### Guiding the model with `:schema_doc`
+
+Field names carry most of the meaning; ambiguity needs prose. `:schema_doc` becomes the
+schema's root description, which both OpenAI and Gemini pass to the model. It is not a
+message, so it never enters conversation history and cannot be trimmed by `:max_history`.
+
+```elixir
+ExAgent.chat(agent, "Extract the invoice",
+  files: [%{path: "inv.pdf"}],
+  schema: Invoice,
+  schema_doc: """
+  issued_on is the date printed on the invoice, not today.
+  total includes tax. One line per billed item.
+  """
+)
+```
+
+If repeating it bothers you, put it on your own module. ExAgent does not need to know:
+
+```elixir
+defmodule Invoice do
+  use Ecto.Schema
+  def doc, do: "issued_on is the date printed on the invoice, not today."
+  # ...
+end
+
+ExAgent.chat(agent, "Extract it", schema: Invoice, schema_doc: Invoice.doc())
+```
+
+### Lists
+
+A JSON Schema root must be an object on OpenAI, so a bare list is wrapped for you and
+unwrapped on the way back. You never see the wrapper.
+
+```elixir
+{:ok, r} = ExAgent.chat(agent, "Extract every invoice in this document",
+             files: [%{path: "invoices.pdf"}],
+             schema: {:list, Invoice},
+             schema_doc: "One entry per invoice, in page order. Skip pages with no invoice.")
+
+r.structured   #=> [%Invoice{...}, %Invoice{...}]
+```
+
+When you want anything *alongside* the list, write a schema whose fields include one. This
+needs no special support:
+
+```elixir
+defmodule InvoiceBatch do
+  use Ecto.Schema
+
+  @primary_key false
+  embedded_schema do
+    embeds_many :invoices, Invoice
+    field :unreadable_pages, {:array, :integer}
+  end
+end
+
+{:ok, r} = ExAgent.chat(agent, "Extract every invoice", files: [...], schema: InvoiceBatch)
+
+r.structured.invoices          #=> [%Invoice{}, %Invoice{}]
+r.structured.unreadable_pages  #=> [7]
+```
+
+That `unreadable_pages` field is worth copying as a habit. It gives the model somewhere to
+put a failure instead of inventing an invoice for a page it could not read.
+
+| Want | Use |
+|---|---|
+| The list is the whole answer | `schema: {:list, Invoice}` |
+| Counts, confidence, or what could not be read | a wrapper schema |
+
+### Every field is required
+
+Ecto has no `required` in the schema, and OpenAI's strict mode demands that every property
+appear in `required`. Those line up, so **every field is required** and there is nothing to
+reconcile. Optional fields cannot be expressed; model the absence explicitly instead:
+
+```elixir
+field :po_number, :string   # the model must return something, even ""
+```
+
+An empty string stays an empty string. Ecto's default is to cast `""` to `nil`, which would
+erase the difference between a model that found nothing and a field it never returned, and
+the second is already an error.
+
+### Primary keys are never sent
+
+`embedded_schema` carries a `binary_id` primary key unless you write `@primary_key false`,
+and that key is always excluded from the schema the model sees. A primary key is identity
+your application assigns, not a fact to extract: asking a model to invent a UUID is
+meaningless, and asking for an integer id invites a hallucinated foreign key that looks
+real.
+
+So a schema you already have drops in unchanged:
+
+```elixir
+defmodule Supplier do
+  use Ecto.Schema              # keeps Ecto's default binary_id primary key
+
+  embedded_schema do
+    field :name, :string
+  end
+end
+
+{:ok, r} = ExAgent.chat(agent, "Who issued this invoice?", files: [%{path: "inv.pdf"}],
+             schema: Supplier)
+
+r.structured   #=> %Supplier{id: nil, name: "ACME Consulting Ltd"}
+
+%{r.structured | id: Ecto.UUID.generate()}   # or let Repo.insert autogenerate
+```
+
+`:id` comes back `nil` because nothing filled it. `@primary_key false` is still what to
+write for a pure extraction schema, as `Invoice` does above; it is simply not required. An
+identifier that appears *in the document* was never a primary key:
+
+```elixir
+field :invoice_number, :string   # extracted
+```
+
+### Errors
+
+```elixir
+# the model declined
+{:error, %ExAgent.Error{type: :refusal}}
+
+# the answer does not fit the schema
+{:error, %ExAgent.Error{type: :invalid_response,
+  message: "model returned JSON that does not fit: currency is invalid"}}
+
+# the schema cannot be expressed for this provider
+{:error, %ExAgent.Error{type: :invalid_request}}
+```
+
+A missing field is an error rather than a `nil`, because an endpoint that ignored the schema
+would otherwise hand back a half-built struct with no signal. Neither error is retryable:
+under constrained decoding a mismatch means the endpoint is not honouring the schema.
+
+### Streaming
+
+A schema and a stream work together, with the JSON decoded once the stream finishes. There
+are no partial objects mid-stream.
+
+```elixir
+{:ok, r} =
+  agent
+  |> ExAgent.chat_stream("Extract the invoice", files: [%{path: "inv.pdf"}], schema: Invoice)
+  |> ExAgent.collect(schema: Invoice)
+
+r.structured   #=> %Invoice{}
+```
+
+The schema is given **twice** on purpose. A stream is a plain enumerable and carries no
+memory of how it was built, so `chat_stream/3` needs it to constrain the model and
+`collect/2` needs it to cast. Passing it to only one of them is legal and does half the job.
+
+### Typed tool parameters
+
+The same schema describes a tool's arguments, and your tool function receives a struct
+instead of a string-keyed map.
+
+```elixir
+defmodule OrderQuery do
+  use Ecto.Schema
+
+  @primary_key false
+  embedded_schema do
+    field :order_id, :string
+  end
+end
+
+{:ok, tool} =
+  ExAgent.Tool.new(
+    name: "order_status",
+    description: "Look up the delivery status of an order by its ID",
+    parameters: OrderQuery,
+    function: fn %OrderQuery{order_id: id} -> Repo.get(Order, id) end
+  )
+```
+
+A typo in the tool body becomes a compile-time warning rather than a `KeyError` inside the
+agent loop. `parameters:` still accepts a raw JSON Schema map, so nothing breaks.
+
+Arguments the model gets wrong never reach your function. The cast failure is fed back as a
+tool error, which is what lets the model correct itself and try again.
+
+Schemas and tools combine freely: the schema rides on every turn, and the model calls tools
+until it has what it needs, then answers in the requested shape.
+
+```elixir
+{:ok, agent} = ExAgent.start_agent(provider: provider, tools: [rate_tool])
+
+{:ok, r} = ExAgent.chat(agent, "Look up the USD rate, then extract this invoice:\n\n" <> text,
+             schema: Invoice)
+
+r.structured.currency   #=> :USD
+```
 
 ## Streaming
 

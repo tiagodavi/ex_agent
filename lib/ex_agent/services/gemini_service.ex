@@ -8,7 +8,7 @@ defmodule ExAgent.Services.GeminiService do
 
   alias ExAgent.{Attachment, Chunk, Error, FileRef, Message, Response, UploadCache}
   alias ExAgent.Providers.Gemini
-  alias ExAgent.Services.{GeminiUploadService, Streaming}
+  alias ExAgent.Services.{GeminiUploadService, Streaming, Structured}
 
   # Gemini's inline request-size ceiling. PDFs get a larger allowance; anything
   # above goes through the Files API instead.
@@ -21,7 +21,9 @@ defmodule ExAgent.Services.GeminiService do
     # Gemini's own spelling, accepted as an alias so a caller reading Google's
     # docs is not silently ignored.
     max_output_tokens: [type: {:or, [:pos_integer, nil]}],
-    built_in_tools: [type: {:list, :atom}, default: []]
+    built_in_tools: [type: {:list, :atom}, default: []],
+    schema: [type: :any],
+    schema_doc: [type: {:or, [:string, nil]}]
   ]
 
   @gemini_built_in_tools %{
@@ -44,19 +46,32 @@ defmodule ExAgent.Services.GeminiService do
   def chat(%Gemini{} = provider, messages, opts \\ []) do
     with {:ok, messages} <- prepare_attachments(provider, messages, opts) do
       opts = prepare_opts(provider, opts)
-      body = build_chat_body(messages, provider.tools, provider.system_prompt, opts)
 
-      Req.post(provider.req,
-        url: "/models/#{provider.model}:generateContent",
-        json: body,
-        connect_options: [timeout: :timer.minutes(5)],
-        receive_timeout: :timer.minutes(5)
-      )
-      |> Error.from_result(Gemini)
-      |> case do
-        {:ok, response_body} -> parse_response(response_body)
-        {:error, _error} = failure -> failure
+      with {:ok, opts} <- put_response_schema(opts) do
+        body = build_chat_body(messages, provider.tools, provider.system_prompt, opts)
+
+        Req.post(provider.req,
+          url: "/models/#{provider.model}:generateContent",
+          json: body,
+          connect_options: [timeout: :timer.minutes(5)],
+          receive_timeout: :timer.minutes(5)
+        )
+        |> Error.from_result(Gemini)
+        |> case do
+          {:ok, response_body} ->
+            response_body |> parse_response() |> Structured.decode(opts[:schema], Gemini)
+
+          {:error, _error} = failure ->
+            failure
+        end
       end
+    end
+  end
+
+  @spec put_response_schema(keyword()) :: {:ok, keyword()} | {:error, Error.t()}
+  defp put_response_schema(opts) do
+    with {:ok, json_schema} <- Structured.json_schema(opts[:schema], :gemini, opts) do
+      {:ok, Keyword.put(opts, :response_schema, json_schema)}
     end
   end
 
@@ -75,6 +90,13 @@ defmodule ExAgent.Services.GeminiService do
       end
 
     opts = prepare_opts(provider, opts)
+
+    opts =
+      case put_response_schema(opts) do
+        {:ok, opts} -> opts
+        {:error, error} -> raise error
+      end
+
     body = build_chat_body(messages, provider.tools, provider.system_prompt, opts)
 
     Streaming.stream(
@@ -378,8 +400,21 @@ defmodule ExAgent.Services.GeminiService do
       %{}
       |> maybe_put("temperature", opts[:temperature])
       |> maybe_put("maxOutputTokens", opts[:max_output_tokens])
+      |> maybe_add_response_schema(opts[:response_schema])
 
     if config == %{}, do: body, else: Map.put(body, "generationConfig", config)
+  end
+
+  # `responseSchema` alone is not enough: without `responseMimeType` Gemini
+  # answers with prose. The schema itself omits `additionalProperties`, which
+  # Gemini rejects as an unknown field.
+  @spec maybe_add_response_schema(map(), map() | nil) :: map()
+  defp maybe_add_response_schema(config, nil), do: config
+
+  defp maybe_add_response_schema(config, schema) do
+    config
+    |> Map.put("responseMimeType", "application/json")
+    |> Map.put("responseSchema", schema)
   end
 
   defp maybe_put(map, _key, nil), do: map

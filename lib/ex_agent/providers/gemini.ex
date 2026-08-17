@@ -103,6 +103,9 @@ defmodule ExAgent.Providers.Gemini do
   end
 
   @impl true
+  def supports_structured_output?(_provider), do: true
+
+  @impl true
   def chat(provider, messages, opts \\ []) do
     ExAgent.Services.GeminiService.chat(provider, messages, opts)
   end

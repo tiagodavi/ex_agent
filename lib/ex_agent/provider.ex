@@ -138,12 +138,21 @@ defmodule ExAgent.Provider do
   """
   @callback embedding_tasks(provider :: struct()) :: [ExAgent.Embeddings.task()]
 
+  @doc """
+  Whether this provider instance can constrain output to a JSON Schema.
+
+  Optional - omitting it means no, so a provider that has not opted in refuses a
+  `:schema` rather than quietly ignoring it and returning prose.
+  """
+  @callback supports_structured_output?(provider :: struct()) :: boolean()
+
   @optional_callbacks upload: 4,
                       stream: 3,
                       supported_modalities: 1,
                       embed: 3,
                       embedding_tasks: 1,
-                      rerank: 4
+                      rerank: 4,
+                      supports_structured_output?: 1
 
   @doc """
   Returns the attachment modalities the provider accepts.
@@ -174,7 +183,8 @@ defmodule ExAgent.Provider do
           | {:tool_call, String.t(), map()}
           | {:error, ExAgent.Error.t()}
   def chat(provider, messages, opts \\ []) do
-    with :ok <- check_modalities(provider, messages) do
+    with :ok <- check_modalities(provider, messages),
+         :ok <- check_structured_output(provider, opts) do
       ExAgent.Telemetry.span(
         [:chat],
         %{
@@ -286,6 +296,31 @@ defmodule ExAgent.Provider do
     else
       {:error,
        ExAgent.Error.new(:unsupported, "#{inspect(mod)} does not support embeddings", mod)}
+    end
+  end
+
+  # A `:schema` reaching a provider that cannot constrain decoding would come
+  # back as prose, so it is refused here rather than in each service.
+  @spec check_structured_output(struct(), keyword()) :: :ok | {:error, ExAgent.Error.t()}
+  defp check_structured_output(provider, opts) do
+    mod = provider.__struct__
+
+    cond do
+      is_nil(opts[:schema]) ->
+        :ok
+
+      function_exported?(mod, :supports_structured_output?, 1) and
+          mod.supports_structured_output?(provider) ->
+        :ok
+
+      true ->
+        {:error,
+         ExAgent.Error.new(
+           :unsupported,
+           "#{inspect(mod)} does not support structured output; drop :schema or use a " <>
+             "provider that constrains decoding to a JSON Schema",
+           mod
+         )}
     end
   end
 

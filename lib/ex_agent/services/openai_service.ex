@@ -7,7 +7,7 @@ defmodule ExAgent.Services.OpenAIService do
   """
 
   alias ExAgent.Providers.OpenAI
-  alias ExAgent.Services.{OpenAIDialect, OpenAIUploadService, Streaming}
+  alias ExAgent.Services.{OpenAIDialect, OpenAIUploadService, Streaming, Structured}
   alias ExAgent.{Attachment, Error, FileRef, Message, UploadCache}
 
   # Above this, bytes go through the Files API instead of a base64 data URI.
@@ -17,7 +17,10 @@ defmodule ExAgent.Services.OpenAIService do
     temperature: [type: {:or, [:float, :integer, nil]}],
     max_tokens: [type: {:or, [:pos_integer, nil]}],
     tool_choice: [type: {:or, [:string, :map]}, default: "auto"],
-    built_in_tools: [type: {:list, {:or, [:atom, :map]}}, default: []]
+    built_in_tools: [type: {:list, {:or, [:atom, :map]}}, default: []],
+    # Validated by `ExAgent.Schema`, which owns the vocabulary.
+    schema: [type: :any],
+    schema_doc: [type: {:or, [:string, nil]}]
   ]
 
   @doc """
@@ -43,18 +46,47 @@ defmodule ExAgent.Services.OpenAIService do
           | {:error, Error.t()}
   defp do_chat(provider, messages, opts) do
     opts = prepare_opts(provider, opts)
-    body = build_chat_body(provider, messages, opts)
 
-    Req.post(provider.req,
-      url: "/chat/completions",
-      json: body,
-      connect_options: [timeout: :timer.minutes(5)],
-      receive_timeout: :timer.minutes(5)
-    )
-    |> Error.from_result(OpenAI)
-    |> case do
-      {:ok, response_body} -> parse_response(response_body)
-      {:error, _error} = failure -> failure
+    with {:ok, format} <- response_format(opts) do
+      body = build_chat_body(provider, messages, opts, format)
+
+      Req.post(provider.req,
+        url: "/chat/completions",
+        json: body,
+        connect_options: [timeout: :timer.minutes(5)],
+        receive_timeout: :timer.minutes(5)
+      )
+      |> Error.from_result(OpenAI)
+      |> case do
+        {:ok, response_body} ->
+          response_body |> parse_response() |> Structured.decode(opts[:schema], OpenAI)
+
+        {:error, _error} = failure ->
+          failure
+      end
+    end
+  end
+
+  # OpenAI's strict mode is what makes the answer castable, so it is always on.
+  # A schema that cannot satisfy it fails here, before the request.
+  @spec response_format(keyword()) :: {:ok, map() | nil} | {:error, Error.t()}
+  defp response_format(opts) do
+    with {:ok, json_schema} <- Structured.json_schema(opts[:schema], :openai, opts) do
+      case json_schema do
+        nil ->
+          {:ok, nil}
+
+        schema ->
+          {:ok,
+           %{
+             "type" => "json_schema",
+             "json_schema" => %{
+               "name" => Structured.name(opts[:schema]),
+               "strict" => true,
+               "schema" => schema
+             }
+           }}
+      end
     end
   end
 
@@ -71,9 +103,15 @@ defmodule ExAgent.Services.OpenAIService do
 
     opts = prepare_opts(provider, opts)
 
+    format =
+      case response_format(opts) do
+        {:ok, format} -> format
+        {:error, error} -> raise error
+      end
+
     body =
       provider
-      |> build_chat_body(messages, opts)
+      |> build_chat_body(messages, opts, format)
       |> Map.put("stream", true)
       |> Map.put("stream_options", %{"include_usage" => true})
 
@@ -179,14 +217,15 @@ defmodule ExAgent.Services.OpenAIService do
     |> Keyword.merge(temperature: temperature, max_tokens: max_tokens)
   end
 
-  @spec build_chat_body(OpenAI.t(), [Message.t()], keyword()) :: map()
-  defp build_chat_body(provider, messages, opts) do
+  @spec build_chat_body(OpenAI.t(), [Message.t()], keyword(), map() | nil) :: map()
+  defp build_chat_body(provider, messages, opts, response_format) do
     OpenAIDialect.build_body(provider.model, messages,
       system_prompt: provider.system_prompt,
       tools: provider.tools,
       tool_choice: opts[:tool_choice],
       temperature: opts[:temperature],
       max_tokens: opts[:max_tokens],
+      response_format: response_format,
       attachment_formatter: &format_attachment/1
     )
     |> maybe_add_built_in_tools(opts[:built_in_tools])

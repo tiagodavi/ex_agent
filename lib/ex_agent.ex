@@ -103,6 +103,7 @@ defmodule ExAgent do
   """
 
   alias ExAgent.{Agent, Chunk, Context, FileRef, Message, Provider, Roles}
+  alias ExAgent.Services.Structured
   alias ExAgent.Patterns.{Handoff, Router}
 
   # --- Provider Roles ---
@@ -390,9 +391,28 @@ defmodule ExAgent do
 
   Note that consuming a stream this way still commits the turn to the agent's
   context, exactly as iterating it would.
+
+  ## Options
+
+  - `:schema` - the same `Ecto` schema passed to `chat_stream/3`, which casts the
+    finished text into `:structured`. It has to be given twice because a stream is
+    a plain enumerable and carries no memory of how it was built. Passing it to
+    `chat_stream/3` alone constrains the model but leaves `:structured` nil;
+    passing it here alone casts an answer that was never constrained.
+
+        {:ok, response} =
+          agent
+          |> ExAgent.chat_stream("Extract the invoice", schema: Invoice)
+          |> ExAgent.collect(schema: Invoice)
+
+        response.structured   #=> %Invoice{}
+
+  There are no partial objects mid-stream: the JSON is decoded once, when the
+  stream finishes.
   """
-  @spec collect(Enumerable.t()) :: {:ok, ExAgent.Response.t()} | {:error, ExAgent.Error.t()}
-  def collect(chunks) do
+  @spec collect(Enumerable.t(), keyword()) ::
+          {:ok, ExAgent.Response.t()} | {:error, ExAgent.Error.t()}
+  def collect(chunks, opts \\ []) do
     acc =
       Enum.reduce(
         chunks,
@@ -419,7 +439,7 @@ defmodule ExAgent do
       )
 
     case acc.error do
-      nil -> {:ok, build_response(acc)}
+      nil -> Structured.decode({:ok, build_response(acc)}, opts[:schema], nil)
       error -> {:error, error}
     end
   end

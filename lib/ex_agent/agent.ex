@@ -683,9 +683,13 @@ defmodule ExAgent.Agent do
       nil ->
         {:error, "unknown tool: #{name}"}
 
-      %Tool{function: fun} ->
+      %Tool{} = tool ->
         ExAgent.Telemetry.span([:tool], %{tool: name}, fn ->
-          normalize_tool_result(fun.(args))
+          case Tool.cast_args(tool, args) do
+            {:ok, cast} -> normalize_tool_result(tool.function.(cast))
+            # Feedback, not a crash: the model can fix its own arguments.
+            {:error, message} -> {:error, message}
+          end
         end)
     end
   end

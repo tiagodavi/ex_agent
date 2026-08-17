@@ -16,6 +16,10 @@ defmodule ExAgent.Response do
   `:thinking` carries a reasoning trace when the model emitted one. It is
   deliberately kept out of `:message` - reasoning is not conversation history,
   and replaying it corrupts the next turn.
+
+  `:structured` holds the struct cast from the answer when `:schema` was given,
+  and `nil` otherwise. `:content` still carries the raw JSON string, so nothing
+  is lost.
   """
 
   alias ExAgent.Message
@@ -31,12 +35,21 @@ defmodule ExAgent.Response do
           message: Message.t(),
           tool_calls: [map()] | nil,
           thinking: String.t() | nil,
+          structured: struct() | [struct()] | nil,
           usage: usage(),
           finish_reason: ExAgent.Chunk.finish_reason()
         }
 
   @enforce_keys [:content, :message]
-  defstruct [:content, :message, :tool_calls, :thinking, :finish_reason, usage: %{}]
+  defstruct [
+    :content,
+    :message,
+    :tool_calls,
+    :thinking,
+    :structured,
+    :finish_reason,
+    usage: %{}
+  ]
 
   @doc """
   Wraps an assistant message in a response.
@@ -54,6 +67,7 @@ defmodule ExAgent.Response do
       message: message,
       tool_calls: message.tool_calls,
       thinking: attrs[:thinking],
+      structured: attrs[:structured],
       usage: attrs[:usage] || %{},
       finish_reason: attrs[:finish_reason]
     }

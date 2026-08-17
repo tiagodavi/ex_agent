@@ -1,7 +1,7 @@
 defmodule ExAgent.MixProject do
   use Mix.Project
 
-  @version "0.3.0"
+  @version "0.4.0"
   @url_docs "https://hexdocs.pm/ex_agent"
   @url_github "https://github.com/tiagodavi/ex_agent"
 
@@ -14,7 +14,7 @@ defmodule ExAgent.MixProject do
       files: ~w(lib assets .formatter.exs mix.exs README* LICENSE* CHANGELOG* NOTICE),
       licenses: ["Apache-2.0"],
       maintainers: [
-        "Tiago D S Batista"
+        "Tiago Batista"
       ],
       links: %{
         "Docs" => @url_docs,
@@ -63,6 +63,7 @@ defmodule ExAgent.MixProject do
           ExAgent.FileRef,
           ExAgent.UploadCache
         ],
+        "Structured output": [ExAgent.Schema],
         Embeddings: [ExAgent.Embeddings],
         Reranking: [ExAgent.Reranking],
         "Multi-agent patterns": [
@@ -83,7 +84,6 @@ defmodule ExAgent.MixProject do
           ExAgent.Services.OpenAIEmbedService,
           ExAgent.Services.OpenAIUploadService,
           ExAgent.Services.OpenAICompatibleService,
-          ExAgent.Services.OpenAICompatibleEmbedService,
           ExAgent.Services.GeminiService,
           ExAgent.Services.GeminiEmbedService,
           ExAgent.Services.GeminiUploadService,
@@ -123,11 +123,16 @@ defmodule ExAgent.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:req, "~> 0.5"},
+      # Floor is 0.7 rather than 0.5: everything below 0.6.1 carries
+      # EEF-CVE-2026-49755, an unbounded-decompression DoS on response bodies.
+      {:req, "~> 0.7"},
       {:telemetry, "~> 1.0"},
       {:jason, "~> 1.4"},
       {:mime, "~> 2.0"},
       {:nimble_options, "~> 1.1"},
+      # Optional: only needed for structured output and typed tool parameters,
+      # where the schema *is* an Ecto embedded schema.
+      {:ecto, "~> 3.10", optional: true},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:mox, "~> 1.1", only: :test},
       {:plug, "~> 1.16", only: :test}

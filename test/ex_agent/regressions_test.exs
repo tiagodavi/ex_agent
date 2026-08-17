@@ -75,7 +75,7 @@ defmodule ExAgent.RegressionsTest do
       provider = %OpenAI{
         api_key: "k",
         base_url: "http://x",
-        req: Req.new(adapter: FakeSSE.adapter([sse]))
+        req: FakeSSE.req([sse])
       }
 
       assert [%Chunk{type: :text_delta, text: "hi"}, %Chunk{type: :done}] =
@@ -95,7 +95,7 @@ defmodule ExAgent.RegressionsTest do
       provider = %OpenAI{
         api_key: "k",
         base_url: "http://x",
-        req: Req.new(adapter: FakeSSE.adapter(parts))
+        req: FakeSSE.req(parts)
       }
 
       send(self(), :interleaved)
@@ -430,9 +430,20 @@ defmodule ExAgent.RegressionsTest do
 
   describe "unparseable responses" do
     test "given a message with neither content nor tool calls, then it is a normalized error" do
-      body = %{"choices" => [%{"message" => %{"refusal" => "I cannot help"}}]}
+      body = %{"choices" => [%{"message" => %{"role" => "assistant"}}]}
 
       assert {:error, %Error{type: :server}} = OpenAIDialect.parse_response(body, OpenAI)
+    end
+
+    # This used to be classified `:server`, and therefore retryable, which meant a
+    # retry wrapper would resend a request the model had explicitly declined.
+    test "given a refusal, then it is classified as one rather than as a server fault" do
+      body = %{"choices" => [%{"message" => %{"refusal" => "I cannot help"}}]}
+
+      assert {:error, %Error{type: :refusal, retryable?: false} = error} =
+               OpenAIDialect.parse_response(body, OpenAI)
+
+      assert error.message == "I cannot help"
     end
   end
 
