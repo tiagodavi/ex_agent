@@ -20,7 +20,8 @@ defmodule ExAgent.Services.OpenAIService do
     built_in_tools: [type: {:list, {:or, [:atom, :map]}}, default: []],
     # Validated by `ExAgent.Schema`, which owns the vocabulary.
     schema: [type: :any],
-    schema_doc: [type: {:or, [:string, nil]}]
+    schema_doc: [type: {:or, [:string, nil]}],
+    receive_timeout: [type: {:or, [:pos_integer, nil]}]
   ]
 
   @doc """
@@ -35,10 +36,19 @@ defmodule ExAgent.Services.OpenAIService do
           | {:tool_calls, [map()]}
           | {:error, Error.t()}
   def chat(%OpenAI{} = provider, messages, opts \\ []) do
+    provider = resolve_timeout(provider, opts)
+
     with {:ok, messages} <- prepare_attachments(provider, messages) do
       do_chat(provider, messages, opts)
     end
   end
+
+  # An upload runs before the chat request and spends the same wall clock, so a
+  # per-call `:receive_timeout` has to reach it too. `prepare_attachments/2` is
+  # not given the call opts, so the resolved value rides on the provider.
+  @spec resolve_timeout(OpenAI.t(), keyword()) :: OpenAI.t()
+  defp resolve_timeout(provider, opts),
+    do: %{provider | receive_timeout: opts[:receive_timeout] || provider.receive_timeout}
 
   @spec do_chat(OpenAI.t(), [Message.t()], keyword()) ::
           {:ok, Response.t()}
@@ -53,8 +63,8 @@ defmodule ExAgent.Services.OpenAIService do
       Req.post(provider.req,
         url: "/chat/completions",
         json: body,
-        connect_options: [timeout: :timer.minutes(5)],
-        receive_timeout: :timer.minutes(5)
+        connect_options: [timeout: opts[:receive_timeout]],
+        receive_timeout: opts[:receive_timeout]
       )
       |> Error.from_result(OpenAI)
       |> case do
@@ -95,6 +105,8 @@ defmodule ExAgent.Services.OpenAIService do
   """
   @spec stream(OpenAI.t(), [Message.t()], keyword()) :: Enumerable.t()
   def stream(%OpenAI{} = provider, messages, opts \\ []) do
+    provider = resolve_timeout(provider, opts)
+
     messages =
       case prepare_attachments(provider, messages) do
         {:ok, prepared} -> prepared
@@ -117,7 +129,7 @@ defmodule ExAgent.Services.OpenAIService do
 
     Streaming.stream(
       provider.req,
-      [url: "/chat/completions", json: body, receive_timeout: :timer.minutes(5)],
+      [url: "/chat/completions", json: body, receive_timeout: opts[:receive_timeout]],
       OpenAI,
       &OpenAIDialect.chunks/1
     )
@@ -181,7 +193,10 @@ defmodule ExAgent.Services.OpenAIService do
           {:ok, as_file_ref(attachment, ref)}
 
         :miss ->
-          upload_opts = [filename: attachment.filename || "upload"]
+          upload_opts = [
+            filename: attachment.filename || "upload",
+            receive_timeout: provider.receive_timeout
+          ]
 
           with {:ok, ref} <-
                  OpenAIUploadService.upload(
@@ -210,11 +225,16 @@ defmodule ExAgent.Services.OpenAIService do
   defp prepare_opts(provider, opts) do
     max_tokens = opts[:max_tokens] || provider.max_tokens
     temperature = opts[:temperature] || provider.temperature
+    receive_timeout = opts[:receive_timeout] || provider.receive_timeout
 
     opts
     |> Keyword.take(Keyword.keys(@chat_opts_schema))
     |> NimbleOptions.validate!(@chat_opts_schema)
-    |> Keyword.merge(temperature: temperature, max_tokens: max_tokens)
+    |> Keyword.merge(
+      temperature: temperature,
+      max_tokens: max_tokens,
+      receive_timeout: receive_timeout
+    )
   end
 
   @spec build_chat_body(OpenAI.t(), [Message.t()], keyword(), map() | nil) :: map()

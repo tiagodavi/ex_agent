@@ -70,6 +70,18 @@ defmodule ExAgent.Providers.OpenAICompatible do
   `{:error, %ExAgent.Error{type: :unsupported}}` telling you to host the asset at
   a URL the container can reach - it is never silently truncated or retried.
 
+  ## Timeouts
+
+  `:receive_timeout` (5 minutes by default) is the ceiling for a single call, and
+  a call site can lower it per request:
+
+      ExAgent.chat(agent, "Describe this clip",
+        files: [%{path: "clip.mp4"}],
+        receive_timeout: :timer.seconds(150))
+
+  Set it below any supervising timeout you wrap the call in - a `Task` killed at
+  180 s around a request still willing to wait 300 s reports a hung call as a
+  dropped result. The connect timeout follows the same value.
 
   ## Verifying the served model
 
@@ -90,6 +102,8 @@ defmodule ExAgent.Providers.OpenAICompatible do
 
   alias ExAgent.Error
 
+  @default_receive_timeout :timer.minutes(5)
+
   @type t :: %__MODULE__{
           base_url: String.t(),
           model: String.t(),
@@ -97,6 +111,7 @@ defmodule ExAgent.Providers.OpenAICompatible do
           headers: [{String.t(), String.t()}],
           modalities: [ExAgent.Source.modality()],
           max_inline_bytes: pos_integer(),
+          receive_timeout: pos_integer(),
           temperature: float() | nil,
           max_tokens: pos_integer() | nil,
           system_prompt: String.t() | nil,
@@ -114,6 +129,7 @@ defmodule ExAgent.Providers.OpenAICompatible do
     headers: [],
     modalities: [:text],
     max_inline_bytes: 33_554_432,
+    receive_timeout: @default_receive_timeout,
     temperature: nil,
     max_tokens: nil,
     tools: []
@@ -141,6 +157,13 @@ defmodule ExAgent.Providers.OpenAICompatible do
       type: :pos_integer,
       default: 33_554_432,
       doc: "Largest attachment sent as a data URI; there is no upload fallback"
+    ],
+    receive_timeout: [
+      type: :pos_integer,
+      default: @default_receive_timeout,
+      doc:
+        "Milliseconds to wait for the response, per call; override per request with " <>
+          "`receive_timeout:` on `chat/3`"
     ],
     temperature: [
       type: {:or, [:float, :integer, nil]},

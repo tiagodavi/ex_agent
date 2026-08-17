@@ -18,7 +18,8 @@ defmodule ExAgent.Services.OpenAICompatibleService do
     max_tokens: [type: {:or, [:pos_integer, nil]}],
     tool_choice: [type: {:or, [:string, :map]}, default: "auto"],
     schema: [type: :any],
-    schema_doc: [type: {:or, [:string, nil]}]
+    schema_doc: [type: {:or, [:string, nil]}],
+    receive_timeout: [type: {:or, [:pos_integer, nil]}]
   ]
 
   @doc """
@@ -37,8 +38,8 @@ defmodule ExAgent.Services.OpenAICompatibleService do
         |> Req.post(
           url: "/chat/completions",
           json: build_chat_body(provider, messages, opts, format),
-          connect_options: [timeout: :timer.minutes(5)],
-          receive_timeout: :timer.minutes(5)
+          connect_options: [timeout: opts[:receive_timeout]],
+          receive_timeout: opts[:receive_timeout]
         )
         |> Error.from_result(OpenAICompatible)
         |> case do
@@ -105,7 +106,7 @@ defmodule ExAgent.Services.OpenAICompatibleService do
 
     Streaming.stream(
       provider.req,
-      [url: "/chat/completions", json: body, receive_timeout: :timer.minutes(5)],
+      [url: "/chat/completions", json: body, receive_timeout: opts[:receive_timeout]],
       OpenAICompatible,
       &OpenAIDialect.chunks/1
     )
@@ -128,11 +129,16 @@ defmodule ExAgent.Services.OpenAICompatibleService do
   defp prepare_opts(provider, opts) do
     max_tokens = opts[:max_tokens] || provider.max_tokens
     temperature = opts[:temperature] || provider.temperature
+    receive_timeout = opts[:receive_timeout] || provider.receive_timeout
 
     opts
     |> Keyword.take(Keyword.keys(@chat_opts_schema))
     |> NimbleOptions.validate!(@chat_opts_schema)
-    |> Keyword.merge(temperature: temperature, max_tokens: max_tokens)
+    |> Keyword.merge(
+      temperature: temperature,
+      max_tokens: max_tokens,
+      receive_timeout: receive_timeout
+    )
   end
 
   # There is no Files API here, so the only decisions are "reference the URL" or

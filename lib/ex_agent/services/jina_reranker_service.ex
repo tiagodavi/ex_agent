@@ -31,7 +31,7 @@ defmodule ExAgent.Services.JinaRerankerService do
   # validation blob, and saves the round trip.
   @max_documents 512
 
-  @known_opts [:model, :top_n, :return_documents]
+  @known_opts [:model, :top_n, :return_documents, :receive_timeout]
 
   @doc """
   Reorders `documents` by relevance to `query`.
@@ -41,6 +41,8 @@ defmodule ExAgent.Services.JinaRerankerService do
   - `:model` - overrides the provider's `:model` in the request body
   - `:top_n` - return only the best `n`; the server still scores every document
   - `:return_documents` - echo the document text back (default `false`)
+  - `:receive_timeout` - milliseconds to wait for the response; defaults to the
+    provider's `:receive_timeout`
 
   ## Examples
 
@@ -56,7 +58,11 @@ defmodule ExAgent.Services.JinaRerankerService do
       body = build_body(provider, query, documents, opts)
 
       provider.req
-      |> Req.post(url: "/v1/rerank", json: body, receive_timeout: :timer.minutes(5))
+      |> Req.post(
+        url: "/v1/rerank",
+        json: body,
+        receive_timeout: opts[:receive_timeout] || provider.receive_timeout
+      )
       |> Error.from_result(JinaRerankerM0)
       |> case do
         {:ok, response} -> build_result(response, provider, length(documents))

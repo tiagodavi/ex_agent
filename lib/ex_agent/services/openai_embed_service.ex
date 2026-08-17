@@ -39,6 +39,8 @@ defmodule ExAgent.Services.OpenAIEmbedService do
   - `:task` - unsupported; any non-nil value returns an error
   - `:args` - `encoding_format` (`"float"` or `"base64"`) and `user`; any other
     key is rejected
+  - `:receive_timeout` - milliseconds to wait for the response; defaults to the
+    provider's `:receive_timeout`
   """
 
   @spec embed(OpenAI.t(), [Embeddings.input()], keyword()) ::
@@ -57,7 +59,11 @@ defmodule ExAgent.Services.OpenAIEmbedService do
         |> merge_args(args)
 
       provider.req
-      |> Req.post(url: "/embeddings", json: body, receive_timeout: :timer.minutes(5))
+      |> Req.post(
+        url: "/embeddings",
+        json: body,
+        receive_timeout: opts[:receive_timeout] || provider.receive_timeout
+      )
       |> Error.from_result(OpenAI)
       |> case do
         {:ok, response} -> build_result(response, model, dimensions)

@@ -73,6 +73,8 @@ defmodule ExAgent.Services.GeminiEmbedService do
     does not know yet
   - `:args` - Gemini exposes nothing beyond the above, so any key here is
     rejected rather than silently ignored by the API
+  - `:receive_timeout` - milliseconds to wait for the response; defaults to the
+    provider's `:receive_timeout`
   """
 
   @spec embed(Gemini.t(), [Embeddings.input()], keyword()) ::
@@ -94,7 +96,7 @@ defmodule ExAgent.Services.GeminiEmbedService do
       |> Req.post(
         url: "/models/#{model}:batchEmbedContents",
         json: body,
-        receive_timeout: :timer.minutes(5)
+        receive_timeout: opts[:receive_timeout] || provider.receive_timeout
       )
       |> Error.from_result(Gemini)
       |> case do

@@ -23,7 +23,8 @@ defmodule ExAgent.Services.GeminiService do
     max_output_tokens: [type: {:or, [:pos_integer, nil]}],
     built_in_tools: [type: {:list, :atom}, default: []],
     schema: [type: :any],
-    schema_doc: [type: {:or, [:string, nil]}]
+    schema_doc: [type: {:or, [:string, nil]}],
+    receive_timeout: [type: {:or, [:pos_integer, nil]}]
   ]
 
   @gemini_built_in_tools %{
@@ -53,8 +54,8 @@ defmodule ExAgent.Services.GeminiService do
         Req.post(provider.req,
           url: "/models/#{provider.model}:generateContent",
           json: body,
-          connect_options: [timeout: :timer.minutes(5)],
-          receive_timeout: :timer.minutes(5)
+          connect_options: [timeout: opts[:receive_timeout]],
+          receive_timeout: opts[:receive_timeout]
         )
         |> Error.from_result(Gemini)
         |> case do
@@ -104,7 +105,7 @@ defmodule ExAgent.Services.GeminiService do
       [
         url: "/models/#{provider.model}:streamGenerateContent?alt=sse",
         json: body,
-        receive_timeout: :timer.minutes(5)
+        receive_timeout: opts[:receive_timeout]
       ],
       Gemini,
       &chunks/1
@@ -167,7 +168,11 @@ defmodule ExAgent.Services.GeminiService do
           upload_opts =
             opts
             |> Keyword.take([:poll_interval_ms, :max_poll_attempts])
-            |> Keyword.merge(filename: attachment.filename || "upload", req: provider.req)
+            |> Keyword.merge(
+              filename: attachment.filename || "upload",
+              req: provider.req,
+              receive_timeout: opts[:receive_timeout] || provider.receive_timeout
+            )
 
           with {:ok, ref} <-
                  GeminiUploadService.upload(
@@ -201,8 +206,13 @@ defmodule ExAgent.Services.GeminiService do
 
     max_tokens = validated[:max_output_tokens] || validated[:max_tokens] || provider.max_tokens
     temperature = validated[:temperature] || provider.temperature
+    receive_timeout = validated[:receive_timeout] || provider.receive_timeout
 
-    Keyword.merge(validated, temperature: temperature, max_output_tokens: max_tokens)
+    Keyword.merge(validated,
+      temperature: temperature,
+      max_output_tokens: max_tokens,
+      receive_timeout: receive_timeout
+    )
   end
 
   # Gemini's streaming envelope has changed between API generations, so match the

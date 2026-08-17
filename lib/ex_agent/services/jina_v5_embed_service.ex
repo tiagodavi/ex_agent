@@ -65,6 +65,8 @@ defmodule ExAgent.Services.JinaV5EmbedService do
     matching the server
   - `:args` - `prompt_name: :query | :document` and `normalize: true | false`.
     Nothing else: the server rejects unknown fields
+  - `:receive_timeout` - milliseconds to wait for the response; defaults to the
+    provider's `:receive_timeout`
 
   ## Examples
 
@@ -88,7 +90,11 @@ defmodule ExAgent.Services.JinaV5EmbedService do
         |> merge_args(args)
 
       provider.req
-      |> Req.post(url: "/embed", json: body, receive_timeout: :timer.minutes(5))
+      |> Req.post(
+        url: "/embed",
+        json: body,
+        receive_timeout: opts[:receive_timeout] || provider.receive_timeout
+      )
       |> Error.from_result(JinaV5)
       |> case do
         {:ok, response} -> build_result(response, provider, task, dimensions)

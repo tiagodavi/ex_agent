@@ -91,7 +91,8 @@ provider = ExAgent.Providers.OpenAICompatible.new(
     {"Modal-Secret", System.fetch_env!("MODAL_SECRET")}
   ],
   modalities: [:text, :image, :video],
-  max_inline_bytes: 33_554_432
+  max_inline_bytes: 33_554_432,
+  receive_timeout: :timer.minutes(5)                    # default; per-call overridable
 )
 
 # Gateways using bearer auth: :api_key is sugar for Authorization: Bearer.
@@ -114,6 +115,23 @@ There is **no Files API** here: bytes always become `data:` URIs, and anything p
 `:max_inline_bytes` returns `{:error, %ExAgent.Error{type: :unsupported}}` telling you to
 host it at a URL the container can reach - never truncated, never retried. A
 `%{file_ref: ref}` from another provider is rejected for the same reason.
+
+### Timeouts are yours to set
+
+Every provider carries `:receive_timeout` (5 minutes by default), and every call can lower
+it, because a video call and a text call against the same endpoint do not deserve the same
+budget:
+
+```elixir
+ExAgent.chat(agent, "Describe this clip",
+  files: [%{path: "clip.mp4"}],
+  receive_timeout: :timer.seconds(150))
+```
+
+Set it below any supervising timeout you wrap the call in. A `Task` killed at 180 s around a
+request still willing to wait 300 s reports a slow but valid answer as a dropped call. The
+connect timeout follows the same value, and `:receive_timeout` works the same way on
+`chat_stream/3`, `embed/3` and `rerank/4`.
 
 ### Modalities are per model, not per vendor
 

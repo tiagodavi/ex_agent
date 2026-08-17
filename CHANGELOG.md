@@ -1,3 +1,33 @@
+## v0.4.1 (2026-08-17)
+
+### Fixed
+
+- **`:receive_timeout` is no longer hardcoded.** Every service pinned its HTTP timeout at
+  5 minutes, and the chat services filtered call options through their own schema, so a
+  `receive_timeout:` passed by a caller was dropped without a word. A call wrapped in a
+  shorter supervising timeout, say a `Task` killed at 180 s, could not make the HTTP layer
+  give up first: a request still willing to wait 300 s was reported as a dropped call at
+  180 s even though the answer would have arrived. Uploads were worse off, running on Req's
+  own short default, which a multi-megabyte video body cannot finish inside.
+
+### Added
+
+- **`:receive_timeout` on every provider**, defaulting to the previous 5 minutes:
+
+      provider = OpenAICompatible.new(base_url: url, model: "Qwen3-VL", receive_timeout: 150_000)
+
+  and overridable per request, where the timeout usually belongs, since a video call and a
+  text call against the same endpoint do not deserve the same budget:
+
+      ExAgent.chat(agent, "Describe this clip",
+        files: [%{path: "clip.mp4"}],
+        receive_timeout: :timer.seconds(150))
+
+  Accepted by `chat/3`, `chat_stream/3`, `embed/3` and `rerank/4` across `Providers.OpenAI`,
+  `Providers.Gemini`, `Providers.OpenAICompatible`, `Providers.JinaV5` and
+  `Providers.JinaRerankerM0`. The connect timeout follows the same value, so a hung connect
+  cannot outlive the ceiling you set, and attachment uploads inherit it too.
+
 ## v0.4.0 (2026-08-17)
 
 ### Added

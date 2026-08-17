@@ -18,6 +18,12 @@ defmodule ExAgent.Services.GeminiUploadService do
   @max_poll_attempts 60
   @poll_interval_ms 2_000
 
+  # Req's own default is far too short for a multi-megabyte body: an upload that
+  # was still streaming would be reported as a timeout. Polling is left on Req's
+  # default - a status GET that hangs should give up quickly and be retried by
+  # the next poll.
+  @default_receive_timeout :timer.minutes(5)
+
   @doc """
   Uploads a file to Gemini and returns a file reference.
 
@@ -30,6 +36,7 @@ defmodule ExAgent.Services.GeminiUploadService do
   - `:upload_url` - override upload URL (useful for testing)
   - `:poll_interval_ms` - delay between processing polls (default: `2_000`)
   - `:max_poll_attempts` - polls before giving up (default: `60`, i.e. ~2 minutes)
+  - `:receive_timeout` - milliseconds to wait for the upload (default: 5 minutes)
   """
   @spec upload(String.t(), binary(), String.t(), keyword()) ::
           {:ok, FileRef.t()} | {:error, Error.t()}
@@ -48,7 +55,12 @@ defmodule ExAgent.Services.GeminiUploadService do
 
     req = Keyword.get(opts, :req, Req.new())
 
-    Req.post(req, url: upload_url, headers: headers, body: body)
+    Req.post(req,
+      url: upload_url,
+      headers: headers,
+      body: body,
+      receive_timeout: Keyword.get(opts, :receive_timeout, @default_receive_timeout)
+    )
     |> Error.from_result(Gemini)
     |> case do
       {:ok, %{"file" => file_info}} ->

@@ -16,6 +16,8 @@ defmodule ExAgent.Providers.Gemini do
   # See `ExAgent.Providers.OpenAI` - the credential must not reach a crash dump.
   @derive {Inspect, except: [:api_key, :req]}
 
+  @default_receive_timeout :timer.minutes(5)
+
   @type t :: %__MODULE__{
           api_key: String.t(),
           model: String.t(),
@@ -26,6 +28,7 @@ defmodule ExAgent.Providers.Gemini do
           tools: [ExAgent.Tool.t()],
           modalities: [ExAgent.Source.modality()],
           upload_cache: boolean(),
+          receive_timeout: pos_integer(),
           req: Req.Request.t() | nil
         }
 
@@ -40,7 +43,8 @@ defmodule ExAgent.Providers.Gemini do
     max_tokens: nil,
     tools: [],
     modalities: [:text, :image, :document, :video, :audio],
-    upload_cache: true
+    upload_cache: true,
+    receive_timeout: @default_receive_timeout
   ]
 
   @schema [
@@ -72,6 +76,13 @@ defmodule ExAgent.Providers.Gemini do
       type: :boolean,
       default: true,
       doc: "Reuse previous uploads of identical bytes via `ExAgent.UploadCache`"
+    ],
+    receive_timeout: [
+      type: :pos_integer,
+      default: @default_receive_timeout,
+      doc:
+        "Milliseconds to wait for the response, per call; override per request with " <>
+          "`receive_timeout:` on `ExAgent.chat/3`. Attachment uploads are not covered"
     ]
   ]
 
@@ -86,6 +97,8 @@ defmodule ExAgent.Providers.Gemini do
   - `:system_prompt` - System instruction to prepend
   - `:tools` - List of `ExAgent.Tool` structs
   - `:upload_cache` - Reuse previous uploads of identical bytes (default: `true`)
+  - `:receive_timeout` - Milliseconds to wait for a response (default: 5 minutes),
+    overridable per request with `receive_timeout:` on `ExAgent.chat/3`
   """
   @spec new(keyword()) :: t()
   def new(opts) do

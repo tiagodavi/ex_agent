@@ -10,6 +10,10 @@ defmodule ExAgent.Services.OpenAIUploadService do
   alias ExAgent.FileRef
   alias ExAgent.Providers.OpenAI
 
+  # Req's own default is far too short for a multi-megabyte body: an upload that
+  # was still streaming would be reported as a timeout.
+  @default_receive_timeout :timer.minutes(5)
+
   @doc """
   Uploads a file to OpenAI and returns a file reference.
 
@@ -19,6 +23,7 @@ defmodule ExAgent.Services.OpenAIUploadService do
 
   - `:filename` - original filename (default: `"upload"`)
   - `:purpose` - OpenAI file purpose (default: `"user_data"`)
+  - `:receive_timeout` - milliseconds to wait for the upload (default: 5 minutes)
   """
   @spec upload(Req.Request.t(), binary(), String.t(), keyword()) ::
           {:ok, FileRef.t()} | {:error, Error.t()}
@@ -33,7 +38,8 @@ defmodule ExAgent.Services.OpenAIUploadService do
     Req.post(req,
       url: "/files",
       headers: [{"content-type", "multipart/form-data; boundary=#{boundary}"}],
-      body: body
+      body: body,
+      receive_timeout: Keyword.get(opts, :receive_timeout, @default_receive_timeout)
     )
     |> Error.from_result(OpenAI)
     |> case do

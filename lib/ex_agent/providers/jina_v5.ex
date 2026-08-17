@@ -85,17 +85,26 @@ defmodule ExAgent.Providers.JinaV5 do
   alias ExAgent.Error
 
   @default_model "jina-embeddings-v5-text-small"
+  @default_receive_timeout :timer.minutes(5)
 
   @type t :: %__MODULE__{
           base_url: String.t(),
           api_key: String.t() | nil,
           model: String.t(),
           headers: [{String.t(), String.t()}],
+          receive_timeout: pos_integer(),
           req: Req.Request.t() | nil
         }
 
   @enforce_keys [:base_url]
-  defstruct [:base_url, :api_key, :req, model: @default_model, headers: []]
+  defstruct [
+    :base_url,
+    :api_key,
+    :req,
+    model: @default_model,
+    headers: [],
+    receive_timeout: @default_receive_timeout
+  ]
 
   @schema [
     base_url: [
@@ -117,6 +126,13 @@ defmodule ExAgent.Providers.JinaV5 do
       type: {:list, :any},
       default: [],
       doc: "Extra request headers, e.g. Modal's `Modal-Key` / `Modal-Secret`"
+    ],
+    receive_timeout: [
+      type: :pos_integer,
+      default: @default_receive_timeout,
+      doc:
+        "Milliseconds to wait for the response, per call; override per request with " <>
+          "`receive_timeout:` on `embed/3`"
     ]
   ]
 
